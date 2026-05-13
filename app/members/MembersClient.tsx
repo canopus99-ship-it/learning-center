@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 
 type Member = {
@@ -23,9 +24,11 @@ type Member = {
 
 export default function MembersClient() {
   const supabase = createClient();
+  const router = useRouter();
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // 폼 입력값
   const [name, setName] = useState('');
@@ -141,12 +144,23 @@ export default function MembersClient() {
     }
   }
 
+  // 검색 필터
+  const filteredMembers = members.filter((m) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      m.name?.toLowerCase().includes(q) ||
+      m.phone?.includes(q) ||
+      m.address?.toLowerCase().includes(q)
+    );
+  });
+
   return (
-    <div style={{ maxWidth: 1000, margin: '40px auto', padding: 20 }}>
+    <div style={{ maxWidth: 1100, margin: '40px auto', padding: 20 }}>
       <Link href="/" style={{ color: '#666', fontSize: 13, textDecoration: 'none' }}>← 홈으로</Link>
       <h1 style={{ fontSize: 22, marginTop: 12, marginBottom: 20 }}>회원 관리</h1>
 
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 16, display: 'flex', gap: 8, alignItems: 'center' }}>
         <button onClick={() => setShowForm(!showForm)} style={{
           padding: '10px 20px',
           background: showForm ? '#888' : '#185FA5',
@@ -158,6 +172,19 @@ export default function MembersClient() {
         }}>
           {showForm ? '닫기' : '+ 신규 회원 등록'}
         </button>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="🔍 이름, 연락처, 주소로 검색"
+          style={{
+            flex: 1,
+            padding: '10px 14px',
+            border: '1px solid #ddd',
+            borderRadius: 8,
+            fontSize: 14,
+          }}
+        />
       </div>
 
       {showForm && (
@@ -254,14 +281,16 @@ export default function MembersClient() {
         background: 'white', borderRadius: 12, padding: 24,
         boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
       }}>
-        <h2 style={{ fontSize: 18, marginTop: 0, marginBottom: 16 }}>
-          등록된 회원 ({members.length}명)
+        <h2 style={{ fontSize: 16, marginTop: 0, marginBottom: 16 }}>
+          {searchQuery ? `검색 결과 (${filteredMembers.length}명)` : `전체 회원 (${members.length}명)`}
         </h2>
 
         {loading ? (
           <p style={{ color: '#888' }}>불러오는 중...</p>
-        ) : members.length === 0 ? (
-          <p style={{ color: '#888' }}>아직 등록된 회원이 없습니다.</p>
+        ) : filteredMembers.length === 0 ? (
+          <p style={{ color: '#888' }}>
+            {searchQuery ? '검색 결과가 없습니다.' : '아직 등록된 회원이 없습니다.'}
+          </p>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
@@ -276,8 +305,18 @@ export default function MembersClient() {
               </tr>
             </thead>
             <tbody>
-              {members.map((m) => (
-                <tr key={m.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
+              {filteredMembers.map((m) => (
+                <tr
+                  key={m.id}
+                  onClick={() => router.push(`/members/${m.id}`)}
+                  style={{
+                    borderBottom: '1px solid #f0f0f0',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#f9f9f9'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                >
                   <td style={tdStyle}><strong>{m.name}</strong></td>
                   <td style={tdStyle}>{m.phone}</td>
                   <td style={tdStyle}>{m.birth_date}</td>
@@ -293,6 +332,11 @@ export default function MembersClient() {
               ))}
             </tbody>
           </table>
+        )}
+        {!loading && filteredMembers.length > 0 && (
+          <p style={{ fontSize: 11, color: '#888', marginTop: 12, textAlign: 'center' }}>
+            회원을 클릭하면 상세 화면으로 이동합니다
+          </p>
         )}
       </div>
     </div>
