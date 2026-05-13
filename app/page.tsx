@@ -28,8 +28,14 @@ export default async function Home() {
           <MenuCard
             href="/members"
             title="회원 관리"
-            description="회원 등록 및 목록 조회"
+            description="회원 등록 및 정보 관리"
             icon="👥"
+          />
+          <MenuCard
+            href="/instructors"
+            title="강사 관리"
+            description="강사 정보 및 강사비"
+            icon="👨‍🏫"
           />
           {staff.role === 'admin' && (
             <MenuCard
