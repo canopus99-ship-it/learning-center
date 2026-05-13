@@ -2,9 +2,9 @@ import { redirect, notFound } from 'next/navigation';
 import { getCurrentStaff } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
 import TopBar from '@/components/TopBar';
-import CourseDetailClient from './CourseDetailClient';
+import DatesClient from './DatesClient';
 
-export default async function CourseDetailPage({
+export default async function CourseDatesPage({
   params,
 }: {
   params: Promise<{ id: string }>;
@@ -24,10 +24,9 @@ export default async function CourseDetailPage({
 
   const supabase = await createClient();
 
-  const [courseRes, sessionsRes, instructorsRes] = await Promise.all([
+  const [courseRes, datesRes] = await Promise.all([
     supabase.from('courses').select('*').eq('id', courseId).maybeSingle(),
-    supabase.from('course_sessions').select('*').eq('course_id', courseId),
-    supabase.from('instructors').select('id, name, is_active').order('name'),
+    supabase.from('course_dates').select('*').eq('course_id', courseId).order('class_date').order('start_time'),
   ]);
 
   if (courseRes.error || !courseRes.data) {
@@ -37,10 +36,9 @@ export default async function CourseDetailPage({
   return (
     <div>
       <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
-      <CourseDetailClient
+      <DatesClient
         course={courseRes.data}
-        sessions={sessionsRes.data || []}
-        instructors={instructorsRes.data || []}
+        initialDates={datesRes.data || []}
       />
     </div>
   );
