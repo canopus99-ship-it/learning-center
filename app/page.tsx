@@ -32,6 +32,12 @@ export default async function Home() {
             icon="👥"
           />
           <MenuCard
+            href="/courses"
+            title="강좌 관리"
+            description="강좌 등록 및 관리"
+            icon="📚"
+          />
+          <MenuCard
             href="/instructors"
             title="강사 관리"
             description="강사 정보 및 강사비"
