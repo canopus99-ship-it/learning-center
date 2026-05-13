@@ -23,13 +23,15 @@ export default async function MemberDetailPage({
   }
 
   const supabase = await createClient();
-  const { data: member, error } = await supabase
-    .from('members')
-    .select('*')
-    .eq('id', memberId)
-    .maybeSingle();
+  const [memberRes, enrollmentsRes] = await Promise.all([
+    supabase.from('members').select('*').eq('id', memberId).maybeSingle(),
+    supabase
+      .from('enrollments')
+      .select('*, courses(id, name, category, is_free, fee_jung_gu, fee_other, classroom, capacity, is_active)')
+      .eq('member_id', memberId),
+  ]);
 
-  if (error || !member) {
+  if (memberRes.error || !memberRes.data) {
     notFound();
   }
 
@@ -37,9 +39,10 @@ export default async function MemberDetailPage({
     <div>
       <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
       <MemberDetailClient
-        member={member}
+        member={memberRes.data}
         staffName={staff.name || staff.email}
         staffEmail={staff.email}
+        initialEnrollments={enrollmentsRes.data || []}
       />
     </div>
   );
