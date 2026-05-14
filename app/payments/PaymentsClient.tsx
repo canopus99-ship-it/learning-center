@@ -725,6 +725,15 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                       </div>
                     ) : (
                       <>
+                        <div style={{
+                          padding: 10, marginBottom: 12,
+                          background: '#E6F1FB', border: '1px solid #B5D4F4',
+                          borderRadius: 6, fontSize: 12, color: '#042C53',
+                        }}>
+                          💡 <strong>사용 방법</strong>:
+                          미납/미등록 셀(빨강·흰색)은 <strong>클릭하여 선택</strong>한 뒤 일괄 결제하세요.
+                          이미 등록된 셀(초록)을 <strong>클릭하면 결제 정보 수정/취소</strong> 모달이 열립니다.
+                        </div>
                         {memberEnrollments.map(enrollment => {
                           const course = courses.find(c => c.id === enrollment.course_id);
                           if (!course) return null;
@@ -832,7 +841,14 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     <div
                                       key={month}
                                       onClick={() => {
-                                        if (canSelect && !isAnnualHere) toggleCell(course.id, month);
+                                        if (!canSelect || isAnnualHere) return;
+                                        // 이미 결제 완료된 셀: 결제 모달로 열어서 수정/삭제 가능
+                                        if (payment?.is_paid) {
+                                          openPaymentModal(enrollment, course, month);
+                                        } else {
+                                          // 미납/미등록 셀: 선택 토글 (다중 선택 가능)
+                                          toggleCell(course.id, month);
+                                        }
                                       }}
                                       style={{
                                         flex: '1 0 80px',
@@ -1265,10 +1281,22 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
               }}>✓ 결제 완료</button>
               <button onClick={() => handleSavePayment(false)} style={secondaryBtnStyle}>미납 처리</button>
               {editingPayment.existing && (
-                <button onClick={handleDeletePayment} style={dangerBtnStyle}>기록 삭제</button>
+                <button onClick={handleDeletePayment} style={dangerBtnStyle}>🗑️ 결제 취소</button>
               )}
               <button onClick={() => setPaymentModalOpen(false)} style={secondaryBtnStyle}>취소</button>
             </div>
+
+            {editingPayment.existing && (
+              <div style={{
+                marginTop: 12, padding: 10,
+                background: '#FCEBEB', border: '1px solid #F09595',
+                borderRadius: 6, fontSize: 11, color: '#742020',
+              }}>
+                💡 <strong>결제 취소</strong>는 잘못 처리한 결제를 정정할 때 사용합니다.
+                결제 기록이 완전히 삭제되어 셀이 미납 또는 미등록 상태로 돌아갑니다.
+                (환불과는 다른 기능입니다)
+              </div>
+            )}
           </div>
         </div>
       )}
