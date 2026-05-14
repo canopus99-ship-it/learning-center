@@ -6,60 +6,43 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { DAY_LABELS, FREQUENCY_LABELS, generateRegularDates, type SessionConfig } from '@/lib/courseDates';
 import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus } from '@/lib/enrollment';
+import { END_REASON_LABELS, END_REASON_COLORS, type EndReason } from '@/lib/payments';
 
 type Course = {
-  id: number;
-  category: string;
-  name: string;
-  instructor_id: number | null;
-  classroom: string | null;
-  capacity: number;
-  operation_type: string;
-  operation_months: string | null;
-  fee_jung_gu: number;
-  fee_other: number;
-  is_free: boolean;
-  is_active: boolean;
-  memo: string | null;
+  id: number; category: string; name: string;
+  instructor_id: number | null; classroom: string | null; capacity: number;
+  operation_type: string; operation_months: string | null;
+  fee_jung_gu: number; fee_other: number;
+  is_free: boolean; is_active: boolean; memo: string | null;
 };
 
 type Session = {
-  id: number;
-  frequency: string | null;
-  day_of_week: number | null;
-  specific_date: string | null;
-  start_time: string;
-  end_time: string;
+  id: number; frequency: string | null; day_of_week: number | null;
+  specific_date: string | null; start_time: string; end_time: string;
 };
 
 type Instructor = { id: number; name: string; is_active: boolean };
 
 type MemberInEnrollment = {
-  id: number;
-  name: string;
-  phone: string | null;
-  birth_date: string | null;
-  region_type: string | null;
+  id: number; name: string;
+  phone: string | null; birth_date: string | null; region_type: string | null;
 };
 
 type Enrollment = {
-  id: number;
-  member_id: number;
-  course_id: number;
+  id: number; member_id: number; course_id: number;
   status: EnrollmentStatus;
   waiting_order: number | null;
-  enrolled_at: string;
-  ended_at: string | null;
+  enrolled_at: string; ended_at: string | null;
+  end_reason: EndReason | null;
+  refund_date: string | null;
+  refund_memo: string | null;
   memo: string | null;
   members: MemberInEnrollment | null;
 };
 
 type MemberSearchResult = {
-  id: number;
-  name: string;
-  phone: string | null;
-  birth_date: string | null;
-  region_type: string | null;
+  id: number; name: string;
+  phone: string | null; birth_date: string | null; region_type: string | null;
 };
 
 const CATEGORIES = ['문화강좌', '성숙한시민', '능동적시민', '평등한시민', '기타'];
@@ -96,9 +79,9 @@ export default function CourseDetailClient({
   const [sessions, setSessions] = useState<Session[]>(initialSessions);
   const [enrollments, setEnrollments] = useState<Enrollment[]>(initialEnrollments);
 
-  // 두 가지 수정 모드
-  const [basicEditing, setBasicEditing] = useState(false);  // 가벼운 수정
-  const [scheduleEditing, setScheduleEditing] = useState(false);  // 무거운 수정
+  // 수정 모드
+  const [basicEditing, setBasicEditing] = useState(false);
+  const [scheduleEditing, setScheduleEditing] = useState(false);
 
   // 가벼운 수정 폼
   const [editCategory, setEditCategory] = useState(course.category);
@@ -111,7 +94,7 @@ export default function CourseDetailClient({
   const [editFeeOther, setEditFeeOther] = useState(String(course.fee_other));
   const [editMemo, setEditMemo] = useState(course.memo || '');
 
-  // 무거운 수정 폼 (세션/운영월)
+  // 무거운 수정 폼
   const [editOperationType, setEditOperationType] = useState<'regular' | 'irregular'>(course.operation_type as 'regular' | 'irregular');
   const [editOperationMonths, setEditOperationMonths] = useState<number[]>(
     course.operation_months ? course.operation_months.split(',').filter(Boolean).map(Number) : [...ALL_MONTHS]
@@ -119,36 +102,36 @@ export default function CourseDetailClient({
   const [editRegularSessions, setEditRegularSessions] = useState<any[]>(
     course.operation_type === 'regular' && sessions.length > 0
       ? sessions.map(s => ({
-          frequency: s.frequency || 'weekly',
-          day_of_week: s.day_of_week || 1,
-          start_time: s.start_time,
-          end_time: s.end_time,
+          frequency: s.frequency || 'weekly', day_of_week: s.day_of_week || 1,
+          start_time: s.start_time, end_time: s.end_time,
         }))
       : [{ frequency: 'weekly', day_of_week: 1, start_time: '10:00', end_time: '11:30' }]
   );
   const [editIrregularSessions, setEditIrregularSessions] = useState<any[]>(
     course.operation_type === 'irregular' && sessions.length > 0
       ? sessions.map(s => ({
-          specific_date: s.specific_date,
-          start_time: s.start_time,
-          end_time: s.end_time,
+          specific_date: s.specific_date, start_time: s.start_time, end_time: s.end_time,
         }))
       : [{ specific_date: '', start_time: '10:00', end_time: '11:30' }]
   );
 
-  // 수강신청 추가 모달
+  // 수강신청 추가
   const [showEnrollForm, setShowEnrollForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<MemberSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
 
+  // 수강종료 모달
+  const [endModalOpen, setEndModalOpen] = useState(false);
+  const [endingEnrollment, setEndingEnrollment] = useState<Enrollment | null>(null);
+  const [endReason, setEndReason] = useState<EndReason>('unregistered');
+  const [refundDate, setRefundDate] = useState(new Date().toISOString().split('T')[0]);
+  const [refundMemo, setRefundMemo] = useState('');
+
   const instructorMap = new Map(instructors.map(i => [i.id, i.name]));
-  const activeInstructors = instructors.filter(i =>
-    i.is_active || i.id === course.instructor_id
-  );
+  const activeInstructors = instructors.filter(i => i.is_active || i.id === course.instructor_id);
   const operationMonthsArr = course.operation_months ? course.operation_months.split(',').filter(Boolean).map(Number) : [];
 
-  // 카운트 계산
   const activeCount = enrollments.filter(e => e.status === 'active' || e.status === 'paused').length;
   const waitingList = enrollments.filter(e => e.status === 'waiting').sort((a, b) => (a.waiting_order || 0) - (b.waiting_order || 0));
   const activeList = enrollments.filter(e => e.status === 'active' || e.status === 'paused').sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || ''));
@@ -167,34 +150,25 @@ export default function CourseDetailClient({
 
   async function reloadSessions() {
     const { data } = await supabase
-      .from('course_sessions')
-      .select('*')
-      .eq('course_id', course.id);
+      .from('course_sessions').select('*').eq('course_id', course.id);
     setSessions((data as Session[]) || []);
   }
 
-  // ============================================
-  // 가벼운 수정 (이름/강사/강의실/정원/수강료/메모)
-  // ============================================
+  // 가벼운 수정
   async function handleSaveBasic() {
     if (!editName.trim()) { alert('강좌명을 입력하세요'); return; }
-
     const updated = {
-      category: editCategory,
-      name: editName.trim(),
+      category: editCategory, name: editName.trim(),
       instructor_id: editInstructorId ? parseInt(editInstructorId, 10) : null,
       classroom: editClassroom || null,
       capacity: parseInt(editCapacity, 10) || 20,
       fee_jung_gu: editIsFree ? 0 : (parseInt(editFeeJungGu, 10) || 0),
       fee_other: editIsFree ? 0 : (parseInt(editFeeOther, 10) || 0),
-      is_free: editIsFree,
-      memo: editMemo.trim() || null,
+      is_free: editIsFree, memo: editMemo.trim() || null,
     };
-
     const { error } = await supabase.from('courses').update(updated).eq('id', course.id);
-    if (error) {
-      alert('수정 실패: ' + error.message);
-    } else {
+    if (error) alert('수정 실패: ' + error.message);
+    else {
       alert('강좌 정보가 수정되었습니다!');
       setCourse({ ...course, ...updated });
       setBasicEditing(false);
@@ -202,21 +176,15 @@ export default function CourseDetailClient({
   }
 
   function handleCancelBasic() {
-    setEditCategory(course.category);
-    setEditName(course.name);
+    setEditCategory(course.category); setEditName(course.name);
     setEditInstructorId(course.instructor_id ? String(course.instructor_id) : '');
-    setEditClassroom(course.classroom || '');
-    setEditCapacity(String(course.capacity));
-    setEditIsFree(course.is_free);
-    setEditFeeJungGu(String(course.fee_jung_gu));
-    setEditFeeOther(String(course.fee_other));
-    setEditMemo(course.memo || '');
+    setEditClassroom(course.classroom || ''); setEditCapacity(String(course.capacity));
+    setEditIsFree(course.is_free); setEditFeeJungGu(String(course.fee_jung_gu));
+    setEditFeeOther(String(course.fee_other)); setEditMemo(course.memo || '');
     setBasicEditing(false);
   }
 
-  // ============================================
-  // 무거운 수정 (세션/운영월) - 출석부 재생성 여부 확인
-  // ============================================
+  // 일정 수정
   function addRegularSession() {
     setEditRegularSessions([...editRegularSessions, { frequency: 'weekly', day_of_week: 1, start_time: '10:00', end_time: '11:30' }]);
   }
@@ -245,94 +213,63 @@ export default function CourseDetailClient({
 
   async function handleSaveSchedule() {
     if (editOperationType === 'regular' && editOperationMonths.length === 0) {
-      alert('운영월을 최소 1개 이상 선택하세요');
-      return;
+      alert('운영월을 최소 1개 이상 선택하세요'); return;
     }
     if (editOperationType === 'irregular') {
       const hasEmpty = editIrregularSessions.some(s => !s.specific_date);
       if (hasEmpty) { alert('모든 세션의 날짜를 입력하세요'); return; }
     }
 
-    // 출석부 재생성 여부 확인
     const regenerateDates = confirm(
       '수업 일정이 변경되었습니다.\n\n' +
       '⚠️ "확인"을 누르면:\n' +
       '  - 기존 자동 생성된 수업 날짜가 모두 삭제됩니다\n' +
       '  - 새 일정 기준으로 출석부가 다시 생성됩니다\n' +
       '  - 보강으로 추가한 날짜는 그대로 유지됩니다\n\n' +
-      '"취소"를 누르면 일정 정보만 저장하고 기존 출석부는 유지됩니다.\n' +
-      '(이 경우 출석부 화면에서 직접 정리해야 합니다)'
+      '"취소"를 누르면 일정 정보만 저장하고 기존 출석부는 유지됩니다.'
     );
 
-    // 1. 강좌의 운영구분/운영월 업데이트
-    const { error: courseError } = await supabase
-      .from('courses')
-      .update({
-        operation_type: editOperationType,
-        operation_months: editOperationType === 'regular' ? editOperationMonths.join(',') : null,
-      })
-      .eq('id', course.id);
+    const { error: courseError } = await supabase.from('courses').update({
+      operation_type: editOperationType,
+      operation_months: editOperationType === 'regular' ? editOperationMonths.join(',') : null,
+    }).eq('id', course.id);
 
-    if (courseError) {
-      alert('강좌 수정 실패: ' + courseError.message);
-      return;
-    }
+    if (courseError) { alert('강좌 수정 실패: ' + courseError.message); return; }
 
-    // 2. 기존 세션 삭제 후 새 세션 추가
     await supabase.from('course_sessions').delete().eq('course_id', course.id);
 
     const sessionsToInsert = editOperationType === 'regular'
       ? editRegularSessions.map(s => ({
-          course_id: course.id,
-          frequency: s.frequency, day_of_week: s.day_of_week, specific_date: null,
-          start_time: s.start_time, end_time: s.end_time,
+          course_id: course.id, frequency: s.frequency, day_of_week: s.day_of_week,
+          specific_date: null, start_time: s.start_time, end_time: s.end_time,
         }))
       : editIrregularSessions.map(s => ({
-          course_id: course.id,
-          frequency: null, day_of_week: null, specific_date: s.specific_date,
-          start_time: s.start_time, end_time: s.end_time,
+          course_id: course.id, frequency: null, day_of_week: null,
+          specific_date: s.specific_date, start_time: s.start_time, end_time: s.end_time,
         }));
 
     const { data: insertedSessions, error: sessionsError } = await supabase
-      .from('course_sessions')
-      .insert(sessionsToInsert)
-      .select();
+      .from('course_sessions').insert(sessionsToInsert).select();
 
-    if (sessionsError) {
-      alert('세션 저장 실패: ' + sessionsError.message);
-      return;
-    }
+    if (sessionsError) { alert('세션 저장 실패: ' + sessionsError.message); return; }
 
-    // 3. 출석부 재생성
     if (regenerateDates) {
-      // 자동 생성된 (보강이 아닌) 날짜 삭제
-      await supabase
-        .from('course_dates')
-        .delete()
-        .eq('course_id', course.id)
-        .eq('is_makeup', false);
+      await supabase.from('course_dates').delete().eq('course_id', course.id).eq('is_makeup', false);
 
-      // 새 일정으로 날짜 생성
       const datesToInsert: any[] = [];
-
       if (editOperationType === 'regular') {
         const currentYear = new Date().getFullYear();
         const sessionConfigs: SessionConfig[] = editRegularSessions.map(s => ({
           frequency: (s.frequency || 'weekly') as 'weekly' | 'biweekly' | 'monthly',
           day_of_week: s.day_of_week || 1,
-          start_time: s.start_time,
-          end_time: s.end_time,
+          start_time: s.start_time, end_time: s.end_time,
         }));
-
         const generated = generateRegularDates(currentYear, editOperationMonths, sessionConfigs);
         generated.forEach((d) => {
           const sessionId = insertedSessions?.[d.session_index]?.id;
           datesToInsert.push({
-            course_id: course.id,
-            session_id: sessionId || null,
-            class_date: d.class_date,
-            start_time: d.start_time,
-            end_time: d.end_time,
+            course_id: course.id, session_id: sessionId || null,
+            class_date: d.class_date, start_time: d.start_time, end_time: d.end_time,
             is_cancelled: false, is_makeup: false,
           });
         });
@@ -340,11 +277,8 @@ export default function CourseDetailClient({
         editIrregularSessions.forEach((s, idx) => {
           const sessionId = insertedSessions?.[idx]?.id;
           datesToInsert.push({
-            course_id: course.id,
-            session_id: sessionId || null,
-            class_date: s.specific_date,
-            start_time: s.start_time,
-            end_time: s.end_time,
+            course_id: course.id, session_id: sessionId || null,
+            class_date: s.specific_date, start_time: s.start_time, end_time: s.end_time,
             is_cancelled: false, is_makeup: false,
           });
         });
@@ -353,16 +287,13 @@ export default function CourseDetailClient({
       if (datesToInsert.length > 0) {
         await supabase.from('course_dates').insert(datesToInsert);
       }
-
-      alert(`일정이 수정되고 출석부가 다시 생성되었습니다.\n총 ${datesToInsert.length}개의 수업 날짜가 등록되었습니다.`);
+      alert(`일정이 수정되고 출석부가 다시 생성되었습니다. (총 ${datesToInsert.length}개)`);
     } else {
-      alert('일정 정보만 저장되었습니다. (출석부는 변경되지 않음)');
+      alert('일정 정보만 저장되었습니다.');
     }
 
-    // 화면 새로고침
     setCourse({
-      ...course,
-      operation_type: editOperationType,
+      ...course, operation_type: editOperationType,
       operation_months: editOperationType === 'regular' ? editOperationMonths.join(',') : null,
     });
     reloadSessions();
@@ -375,28 +306,22 @@ export default function CourseDetailClient({
     setEditRegularSessions(
       course.operation_type === 'regular' && sessions.length > 0
         ? sessions.map(s => ({
-            frequency: s.frequency || 'weekly',
-            day_of_week: s.day_of_week || 1,
-            start_time: s.start_time,
-            end_time: s.end_time,
+            frequency: s.frequency || 'weekly', day_of_week: s.day_of_week || 1,
+            start_time: s.start_time, end_time: s.end_time,
           }))
         : [{ frequency: 'weekly', day_of_week: 1, start_time: '10:00', end_time: '11:30' }]
     );
     setEditIrregularSessions(
       course.operation_type === 'irregular' && sessions.length > 0
         ? sessions.map(s => ({
-            specific_date: s.specific_date,
-            start_time: s.start_time,
-            end_time: s.end_time,
+            specific_date: s.specific_date, start_time: s.start_time, end_time: s.end_time,
           }))
         : [{ specific_date: '', start_time: '10:00', end_time: '11:30' }]
     );
     setScheduleEditing(false);
   }
 
-  // ============================================
-  // 수강신청 관련 함수들
-  // ============================================
+  // 수강신청
   async function handleSearchMember() {
     if (!searchQuery.trim()) { setSearchResults([]); return; }
     setSearching(true);
@@ -420,6 +345,7 @@ export default function CourseDetailClient({
         await supabase.from('enrollments').update({
           status, waiting_order: waitingOrder,
           enrolled_at: new Date().toISOString(), ended_at: null,
+          end_reason: null, refund_date: null, refund_memo: null,
         }).eq('id', existing.id);
         alert(`${memberName}님이 ${status === 'waiting' ? '대기 명단에 추가' : '수강신청'}되었습니다!`);
         reloadEnrollments();
@@ -444,13 +370,21 @@ export default function CourseDetailClient({
 
   async function handleChangeStatus(e: Enrollment, newStatus: EnrollmentStatus) {
     const memberName = e.members?.name || '회원';
+
+    // 수강종료는 모달로 처리
+    if (newStatus === 'ended') {
+      setEndingEnrollment(e);
+      setEndReason('unregistered');
+      setRefundDate(new Date().toISOString().split('T')[0]);
+      setRefundMemo('');
+      setEndModalOpen(true);
+      return;
+    }
+
     if (!confirm(`${memberName}님을 "${STATUS_LABELS[newStatus]}" 상태로 변경하시겠습니까?`)) return;
 
     const updates: any = { status: newStatus };
-    if (newStatus === 'ended') {
-      updates.ended_at = new Date().toISOString();
-      updates.waiting_order = null;
-    } else if (newStatus === 'paused') {
+    if (newStatus === 'paused') {
       updates.pause_start = new Date().toISOString();
       updates.waiting_order = null;
     } else if (newStatus === 'active') {
@@ -459,6 +393,9 @@ export default function CourseDetailClient({
       if (e.status === 'ended') {
         updates.ended_at = null;
         updates.enrolled_at = new Date().toISOString();
+        updates.end_reason = null;
+        updates.refund_date = null;
+        updates.refund_memo = null;
       }
     } else if (newStatus === 'waiting') {
       updates.waiting_order = waitingList.length + 1;
@@ -467,6 +404,42 @@ export default function CourseDetailClient({
     const { error } = await supabase.from('enrollments').update(updates).eq('id', e.id);
     if (error) alert('변경 실패: ' + error.message);
     else reloadEnrollments();
+  }
+
+  // 수강종료 모달 - 저장
+  async function handleConfirmEnd() {
+    if (!endingEnrollment) return;
+    const memberName = endingEnrollment.members?.name || '회원';
+
+    const updates: any = {
+      status: 'ended',
+      ended_at: new Date().toISOString(),
+      waiting_order: null,
+      end_reason: endReason,
+    };
+
+    if (endReason === 'refund') {
+      if (!refundDate) {
+        alert('환불 처리일을 입력하세요');
+        return;
+      }
+      updates.refund_date = refundDate;
+      updates.refund_memo = refundMemo.trim() || null;
+    } else {
+      updates.refund_date = null;
+      updates.refund_memo = null;
+    }
+
+    const { error } = await supabase.from('enrollments').update(updates).eq('id', endingEnrollment.id);
+
+    if (error) {
+      alert('처리 실패: ' + error.message);
+    } else {
+      alert(`${memberName}님의 수강이 종료되었습니다.\n사유: ${END_REASON_LABELS[endReason]}${endReason === 'refund' ? `\n환불 처리일: ${refundDate}` : ''}`);
+      setEndModalOpen(false);
+      setEndingEnrollment(null);
+      reloadEnrollments();
+    }
   }
 
   async function handleMoveWaitingOrder(e: Enrollment, direction: 'up' | 'down') {
@@ -488,9 +461,6 @@ export default function CourseDetailClient({
     else reloadEnrollments();
   }
 
-  // ============================================
-  // 강좌 종료/삭제
-  // ============================================
   async function handleToggleActive() {
     const action = course.is_active ? '종료' : '운영중';
     if (!confirm(`${course.name} 강좌를 "${action}" 상태로 변경하시겠습니까?`)) return;
@@ -500,13 +470,10 @@ export default function CourseDetailClient({
   }
 
   async function handleDeleteCourse() {
-    if (!confirm(`정말 "${course.name}" 강좌를 완전히 삭제하시겠습니까?\n\n관련된 모든 세션, 수업 날짜, 수강신청도 함께 삭제됩니다.`)) return;
+    if (!confirm(`정말 "${course.name}" 강좌를 완전히 삭제하시겠습니까?`)) return;
     const { error } = await supabase.from('courses').delete().eq('id', course.id);
     if (error) alert('삭제 실패: ' + error.message);
-    else {
-      alert('강좌가 삭제되었습니다');
-      router.push('/courses');
-    }
+    else { alert('강좌가 삭제되었습니다'); router.push('/courses'); }
   }
 
   return (
@@ -520,16 +487,14 @@ export default function CourseDetailClient({
         )}
       </h1>
 
-      {/* 강좌 기본 정보 */}
+      {/* 강좌 정보 */}
       <div style={{ background: 'white', borderRadius: 12, padding: 24, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
           <h2 style={{ fontSize: 16, margin: 0 }}>강좌 정보</h2>
           {!basicEditing ? (
             <div style={{ display: 'flex', gap: 8 }}>
               <button onClick={() => setBasicEditing(true)} style={primaryBtnStyle}>수정</button>
-              <button onClick={handleToggleActive} style={secondaryBtnStyle}>
-                {course.is_active ? '종료 처리' : '재개'}
-              </button>
+              <button onClick={handleToggleActive} style={secondaryBtnStyle}>{course.is_active ? '종료 처리' : '재개'}</button>
               <button onClick={handleDeleteCourse} style={dangerBtnStyle}>강좌 삭제</button>
             </div>
           ) : (
@@ -554,9 +519,7 @@ export default function CourseDetailClient({
                 )}
               </div>
             </div>
-            {course.memo && (
-              <div style={{ gridColumn: '1 / -1' }}><InfoRow label="메모" value={course.memo} /></div>
-            )}
+            {course.memo && <div style={{ gridColumn: '1 / -1' }}><InfoRow label="메모" value={course.memo} /></div>}
           </div>
         ) : (
           <div>
@@ -617,7 +580,7 @@ export default function CourseDetailClient({
         )}
       </div>
 
-      {/* 수업 일정 (세션) */}
+      {/* 수업 일정 */}
       <div style={{ background: 'white', borderRadius: 12, padding: 24, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h2 style={{ fontSize: 16, margin: 0 }}>
@@ -680,15 +643,10 @@ export default function CourseDetailClient({
             )}
           </>
         ) : (
-          // 일정 수정 모드
           <div>
-            <div style={{
-              padding: 12, background: '#FFF8E1', border: '1px solid #FFE082',
-              borderRadius: 6, marginBottom: 16, fontSize: 12, color: '#5D4037',
-            }}>
+            <div style={{ padding: 12, background: '#FFF8E1', border: '1px solid #FFE082', borderRadius: 6, marginBottom: 16, fontSize: 12, color: '#5D4037' }}>
               ⚠️ 일정 변경 시 저장할 때 출석부 재생성 여부를 물어봅니다.
             </div>
-
             <label style={labelStyle}>운영구분 *</label>
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               <button type="button" onClick={() => setEditOperationType('regular')} style={{
@@ -805,7 +763,6 @@ export default function CourseDetailClient({
               <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearchMember()} placeholder="이름 또는 연락처로 검색" style={{ flex: 1, ...inputStyle }} />
               <button onClick={handleSearchMember} style={primaryBtnStyle}>검색</button>
             </div>
-
             {searching ? (<p style={{ fontSize: 13, color: '#888' }}>검색 중...</p>
             ) : searchResults.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
@@ -827,8 +784,7 @@ export default function CourseDetailClient({
                         <span style={{ fontSize: 12, color: '#888' }}>이미 등록됨 ({STATUS_LABELS[existing!.status]})</span>
                       ) : (
                         <button onClick={() => handleEnroll(m.id, m.name)} style={{
-                          padding: '6px 14px',
-                          background: isFull ? '#BA7517' : '#185FA5',
+                          padding: '6px 14px', background: isFull ? '#BA7517' : '#185FA5',
                           color: 'white', border: 'none', borderRadius: 4,
                           cursor: 'pointer', fontSize: 12,
                         }}>
@@ -929,8 +885,9 @@ export default function CourseDetailClient({
               <thead>
                 <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
                   <th style={thStyle}>이름</th>
-                  <th style={thStyle}>연락처</th>
+                  <th style={thStyle}>종료 사유</th>
                   <th style={thStyle}>종료일</th>
+                  <th style={thStyle}>환불 정보</th>
                   <th style={thStyle}>관리</th>
                 </tr>
               </thead>
@@ -940,8 +897,22 @@ export default function CourseDetailClient({
                     <td style={tdStyle}>
                       <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{e.members?.name}</Link>
                     </td>
-                    <td style={tdStyle}>{e.members?.phone || '-'}</td>
+                    <td style={tdStyle}>
+                      {e.end_reason ? (
+                        <span style={badgeStyle(END_REASON_COLORS[e.end_reason])}>
+                          {END_REASON_LABELS[e.end_reason]}
+                        </span>
+                      ) : '-'}
+                    </td>
                     <td style={tdStyle}>{e.ended_at?.substring(0, 10)}</td>
+                    <td style={{ ...tdStyle, fontSize: 12 }}>
+                      {e.refund_date ? (
+                        <span>
+                          <strong>{e.refund_date}</strong>
+                          {e.refund_memo && <span style={{ color: '#888', marginLeft: 4 }}>· {e.refund_memo}</span>}
+                        </span>
+                      ) : '-'}
+                    </td>
                     <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                       <button onClick={() => handleChangeStatus(e, 'active')} style={smallBtnStyle}>재신청</button>
                       <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
@@ -967,6 +938,92 @@ export default function CourseDetailClient({
           <span style={{ fontSize: 18 }}>→</span>
         </div>
       </Link>
+
+      {/* 수강종료 모달 */}
+      {endModalOpen && endingEnrollment && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 100, padding: 20,
+        }}>
+          <div style={{
+            background: 'white', borderRadius: 12, padding: 24,
+            maxWidth: 500, width: '100%',
+          }}>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>수강 종료 처리</h2>
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+              <strong>{endingEnrollment.members?.name}</strong>님의 수강을 종료합니다.
+            </p>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>종료 사유 *</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {(['unregistered', 'refund', 'other'] as EndReason[]).map(r => (
+                  <label key={r} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: 10, border: '1px solid ' + (endReason === r ? '#185FA5' : '#ddd'),
+                    background: endReason === r ? '#E6F1FB' : 'white',
+                    borderRadius: 6, cursor: 'pointer',
+                  }}>
+                    <input
+                      type="radio"
+                      checked={endReason === r}
+                      onChange={() => setEndReason(r)}
+                    />
+                    <div>
+                      <strong style={{ fontSize: 14 }}>{END_REASON_LABELS[r]}</strong>
+                      <p style={{ fontSize: 11, color: '#888', margin: '2px 0 0' }}>
+                        {r === 'unregistered' && '다음 달 등록을 안 하셨거나 자연 종료'}
+                        {r === 'refund' && '회원이 환불 신청서를 작성하여 환불 처리'}
+                        {r === 'other' && '위 사유에 해당하지 않는 경우'}
+                      </p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {endReason === 'refund' && (
+              <div style={{
+                background: '#FCEBEB', border: '1px solid #F09595',
+                padding: 16, borderRadius: 6, marginBottom: 16,
+              }}>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={labelStyle}>환불 처리일 *</label>
+                  <input type="date" value={refundDate} onChange={(e) => setRefundDate(e.target.value)} style={inputStyle} />
+                  <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
+                    회원이 환불 의사를 밝힌 날을 입력하세요. 이 날짜 이후부터 출석체크가 차단됩니다.
+                  </p>
+                </div>
+                <div>
+                  <label style={labelStyle}>환불 메모 (선택)</label>
+                  <input
+                    value={refundMemo}
+                    onChange={(e) => setRefundMemo(e.target.value)}
+                    style={inputStyle}
+                    placeholder="예: 입원으로 환불 신청"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleConfirmEnd} style={{
+                flex: 1, padding: '12px',
+                background: '#185FA5', color: 'white',
+                border: 'none', borderRadius: 6, cursor: 'pointer',
+                fontSize: 14, fontWeight: 500,
+              }}>확인</button>
+              <button onClick={() => { setEndModalOpen(false); setEndingEnrollment(null); }} style={{
+                padding: '12px 24px',
+                background: 'white', color: '#666',
+                border: '1px solid #ddd', borderRadius: 6, cursor: 'pointer',
+                fontSize: 13,
+              }}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
