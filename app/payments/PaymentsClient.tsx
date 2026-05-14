@@ -317,7 +317,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     const toProcess = memberEnrollments.filter(e => bulkEnrollments.has(e.id));
 
     let totalAmount = 0;
-    const operations: Promise<any>[] = [];
+    let hasError = false;
 
     for (const e of toProcess) {
       const course = courses.find(c => c.id === e.course_id);
@@ -345,15 +345,18 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
       totalAmount += calc.amount;
 
+      let result;
       if (existing) {
-        operations.push(supabase.from('payments').update(data).eq('id', existing.id));
+        result = await supabase.from('payments').update(data).eq('id', existing.id);
       } else {
-        operations.push(supabase.from('payments').insert([data]));
+        result = await supabase.from('payments').insert([data]);
+      }
+
+      if (result.error) {
+        hasError = true;
+        console.error('결제 처리 실패:', result.error);
       }
     }
-
-    const results = await Promise.all(operations);
-    const hasError = results.some(r => r.error);
 
     if (hasError) {
       alert('일부 결제 처리에 실패했습니다.');
@@ -1115,4 +1118,3 @@ const modalContentStyle: React.CSSProperties = {
   background: 'white', borderRadius: 12, padding: 24,
   maxWidth: 500, width: '100%', maxHeight: '90vh', overflowY: 'auto',
 };
-
