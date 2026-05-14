@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { DAY_LABELS, FREQUENCY_LABELS } from '@/lib/courseDates';
+import { DAY_LABELS, FREQUENCY_LABELS, generateRegularDates, type SessionConfig } from '@/lib/courseDates';
 import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus } from '@/lib/enrollment';
 
 type Course = {
@@ -62,14 +62,26 @@ type MemberSearchResult = {
   region_type: string | null;
 };
 
+const CATEGORIES = ['문화강좌', '성숙한시민', '능동적시민', '평등한시민', '기타'];
 const CATEGORY_COLORS: Record<string, string> = {
   '문화강좌': '#185FA5', '성숙한시민': '#7B3FBF', '능동적시민': '#1D9E75',
   '평등한시민': '#BA7517', '기타': '#666',
 };
+const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const FREQUENCIES = [
+  { value: 'weekly', label: '매주' },
+  { value: 'biweekly', label: '격주' },
+  { value: 'monthly', label: '매월' },
+];
+const DAYS = [
+  { value: 1, label: '월' }, { value: 2, label: '화' }, { value: 3, label: '수' },
+  { value: 4, label: '목' }, { value: 5, label: '금' }, { value: 6, label: '토' },
+  { value: 7, label: '일' },
+];
 
 export default function CourseDetailClient({
   course: initialCourse,
-  sessions,
+  sessions: initialSessions,
   instructors,
   initialEnrollments,
 }: {
@@ -81,7 +93,48 @@ export default function CourseDetailClient({
   const supabase = createClient();
   const router = useRouter();
   const [course, setCourse] = useState<Course>(initialCourse);
+  const [sessions, setSessions] = useState<Session[]>(initialSessions);
   const [enrollments, setEnrollments] = useState<Enrollment[]>(initialEnrollments);
+
+  // 두 가지 수정 모드
+  const [basicEditing, setBasicEditing] = useState(false);  // 가벼운 수정
+  const [scheduleEditing, setScheduleEditing] = useState(false);  // 무거운 수정
+
+  // 가벼운 수정 폼
+  const [editCategory, setEditCategory] = useState(course.category);
+  const [editName, setEditName] = useState(course.name);
+  const [editInstructorId, setEditInstructorId] = useState<string>(course.instructor_id ? String(course.instructor_id) : '');
+  const [editClassroom, setEditClassroom] = useState(course.classroom || '');
+  const [editCapacity, setEditCapacity] = useState(String(course.capacity));
+  const [editIsFree, setEditIsFree] = useState(course.is_free);
+  const [editFeeJungGu, setEditFeeJungGu] = useState(String(course.fee_jung_gu));
+  const [editFeeOther, setEditFeeOther] = useState(String(course.fee_other));
+  const [editMemo, setEditMemo] = useState(course.memo || '');
+
+  // 무거운 수정 폼 (세션/운영월)
+  const [editOperationType, setEditOperationType] = useState<'regular' | 'irregular'>(course.operation_type as 'regular' | 'irregular');
+  const [editOperationMonths, setEditOperationMonths] = useState<number[]>(
+    course.operation_months ? course.operation_months.split(',').filter(Boolean).map(Number) : [...ALL_MONTHS]
+  );
+  const [editRegularSessions, setEditRegularSessions] = useState<any[]>(
+    course.operation_type === 'regular' && sessions.length > 0
+      ? sessions.map(s => ({
+          frequency: s.frequency || 'weekly',
+          day_of_week: s.day_of_week || 1,
+          start_time: s.start_time,
+          end_time: s.end_time,
+        }))
+      : [{ frequency: 'weekly', day_of_week: 1, start_time: '10:00', end_time: '11:30' }]
+  );
+  const [editIrregularSessions, setEditIrregularSessions] = useState<any[]>(
+    course.operation_type === 'irregular' && sessions.length > 0
+      ? sessions.map(s => ({
+          specific_date: s.specific_date,
+          start_time: s.start_time,
+          end_time: s.end_time,
+        }))
+      : [{ specific_date: '', start_time: '10:00', end_time: '11:30' }]
+  );
 
   // 수강신청 추가 모달
   const [showEnrollForm, setShowEnrollForm] = useState(false);
@@ -90,19 +143,16 @@ export default function CourseDetailClient({
   const [searching, setSearching] = useState(false);
 
   const instructorMap = new Map(instructors.map(i => [i.id, i.name]));
+  const activeInstructors = instructors.filter(i =>
+    i.is_active || i.id === course.instructor_id
+  );
   const operationMonthsArr = course.operation_months ? course.operation_months.split(',').filter(Boolean).map(Number) : [];
 
   // 카운트 계산
   const activeCount = enrollments.filter(e => e.status === 'active' || e.status === 'paused').length;
-  const waitingList = enrollments
-    .filter(e => e.status === 'waiting')
-    .sort((a, b) => (a.waiting_order || 0) - (b.waiting_order || 0));
-  const activeList = enrollments
-    .filter(e => e.status === 'active' || e.status === 'paused')
-    .sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || ''));
-  const endedList = enrollments
-    .filter(e => e.status === 'ended')
-    .sort((a, b) => (b.ended_at || '').localeCompare(a.ended_at || ''));
+  const waitingList = enrollments.filter(e => e.status === 'waiting').sort((a, b) => (a.waiting_order || 0) - (b.waiting_order || 0));
+  const activeList = enrollments.filter(e => e.status === 'active' || e.status === 'paused').sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || ''));
+  const endedList = enrollments.filter(e => e.status === 'ended').sort((a, b) => (b.ended_at || '').localeCompare(a.ended_at || ''));
 
   const isFull = activeCount >= course.capacity;
   const enrolledMemberIds = new Set(enrollments.map(e => e.member_id));
@@ -115,51 +165,262 @@ export default function CourseDetailClient({
     setEnrollments((data as Enrollment[]) || []);
   }
 
-  async function handleSearchMember() {
-    if (!searchQuery.trim()) {
-      setSearchResults([]);
+  async function reloadSessions() {
+    const { data } = await supabase
+      .from('course_sessions')
+      .select('*')
+      .eq('course_id', course.id);
+    setSessions((data as Session[]) || []);
+  }
+
+  // ============================================
+  // 가벼운 수정 (이름/강사/강의실/정원/수강료/메모)
+  // ============================================
+  async function handleSaveBasic() {
+    if (!editName.trim()) { alert('강좌명을 입력하세요'); return; }
+
+    const updated = {
+      category: editCategory,
+      name: editName.trim(),
+      instructor_id: editInstructorId ? parseInt(editInstructorId, 10) : null,
+      classroom: editClassroom || null,
+      capacity: parseInt(editCapacity, 10) || 20,
+      fee_jung_gu: editIsFree ? 0 : (parseInt(editFeeJungGu, 10) || 0),
+      fee_other: editIsFree ? 0 : (parseInt(editFeeOther, 10) || 0),
+      is_free: editIsFree,
+      memo: editMemo.trim() || null,
+    };
+
+    const { error } = await supabase.from('courses').update(updated).eq('id', course.id);
+    if (error) {
+      alert('수정 실패: ' + error.message);
+    } else {
+      alert('강좌 정보가 수정되었습니다!');
+      setCourse({ ...course, ...updated });
+      setBasicEditing(false);
+    }
+  }
+
+  function handleCancelBasic() {
+    setEditCategory(course.category);
+    setEditName(course.name);
+    setEditInstructorId(course.instructor_id ? String(course.instructor_id) : '');
+    setEditClassroom(course.classroom || '');
+    setEditCapacity(String(course.capacity));
+    setEditIsFree(course.is_free);
+    setEditFeeJungGu(String(course.fee_jung_gu));
+    setEditFeeOther(String(course.fee_other));
+    setEditMemo(course.memo || '');
+    setBasicEditing(false);
+  }
+
+  // ============================================
+  // 무거운 수정 (세션/운영월) - 출석부 재생성 여부 확인
+  // ============================================
+  function addRegularSession() {
+    setEditRegularSessions([...editRegularSessions, { frequency: 'weekly', day_of_week: 1, start_time: '10:00', end_time: '11:30' }]);
+  }
+  function removeRegularSession(idx: number) {
+    if (editRegularSessions.length <= 1) { alert('최소 1개의 세션이 필요합니다'); return; }
+    setEditRegularSessions(editRegularSessions.filter((_, i) => i !== idx));
+  }
+  function updateRegularSession(idx: number, key: string, value: any) {
+    setEditRegularSessions(editRegularSessions.map((s, i) => i === idx ? { ...s, [key]: value } : s));
+  }
+  function addIrregularSession() {
+    setEditIrregularSessions([...editIrregularSessions, { specific_date: '', start_time: '10:00', end_time: '11:30' }]);
+  }
+  function removeIrregularSession(idx: number) {
+    if (editIrregularSessions.length <= 1) { alert('최소 1개의 세션이 필요합니다'); return; }
+    setEditIrregularSessions(editIrregularSessions.filter((_, i) => i !== idx));
+  }
+  function updateIrregularSession(idx: number, key: string, value: any) {
+    setEditIrregularSessions(editIrregularSessions.map((s, i) => i === idx ? { ...s, [key]: value } : s));
+  }
+  function toggleEditMonth(month: number) {
+    setEditOperationMonths(prev =>
+      prev.includes(month) ? prev.filter(m => m !== month) : [...prev, month].sort((a, b) => a - b)
+    );
+  }
+
+  async function handleSaveSchedule() {
+    if (editOperationType === 'regular' && editOperationMonths.length === 0) {
+      alert('운영월을 최소 1개 이상 선택하세요');
+      return;
+    }
+    if (editOperationType === 'irregular') {
+      const hasEmpty = editIrregularSessions.some(s => !s.specific_date);
+      if (hasEmpty) { alert('모든 세션의 날짜를 입력하세요'); return; }
+    }
+
+    // 출석부 재생성 여부 확인
+    const regenerateDates = confirm(
+      '수업 일정이 변경되었습니다.\n\n' +
+      '⚠️ "확인"을 누르면:\n' +
+      '  - 기존 자동 생성된 수업 날짜가 모두 삭제됩니다\n' +
+      '  - 새 일정 기준으로 출석부가 다시 생성됩니다\n' +
+      '  - 보강으로 추가한 날짜는 그대로 유지됩니다\n\n' +
+      '"취소"를 누르면 일정 정보만 저장하고 기존 출석부는 유지됩니다.\n' +
+      '(이 경우 출석부 화면에서 직접 정리해야 합니다)'
+    );
+
+    // 1. 강좌의 운영구분/운영월 업데이트
+    const { error: courseError } = await supabase
+      .from('courses')
+      .update({
+        operation_type: editOperationType,
+        operation_months: editOperationType === 'regular' ? editOperationMonths.join(',') : null,
+      })
+      .eq('id', course.id);
+
+    if (courseError) {
+      alert('강좌 수정 실패: ' + courseError.message);
       return;
     }
 
+    // 2. 기존 세션 삭제 후 새 세션 추가
+    await supabase.from('course_sessions').delete().eq('course_id', course.id);
+
+    const sessionsToInsert = editOperationType === 'regular'
+      ? editRegularSessions.map(s => ({
+          course_id: course.id,
+          frequency: s.frequency, day_of_week: s.day_of_week, specific_date: null,
+          start_time: s.start_time, end_time: s.end_time,
+        }))
+      : editIrregularSessions.map(s => ({
+          course_id: course.id,
+          frequency: null, day_of_week: null, specific_date: s.specific_date,
+          start_time: s.start_time, end_time: s.end_time,
+        }));
+
+    const { data: insertedSessions, error: sessionsError } = await supabase
+      .from('course_sessions')
+      .insert(sessionsToInsert)
+      .select();
+
+    if (sessionsError) {
+      alert('세션 저장 실패: ' + sessionsError.message);
+      return;
+    }
+
+    // 3. 출석부 재생성
+    if (regenerateDates) {
+      // 자동 생성된 (보강이 아닌) 날짜 삭제
+      await supabase
+        .from('course_dates')
+        .delete()
+        .eq('course_id', course.id)
+        .eq('is_makeup', false);
+
+      // 새 일정으로 날짜 생성
+      const datesToInsert: any[] = [];
+
+      if (editOperationType === 'regular') {
+        const currentYear = new Date().getFullYear();
+        const sessionConfigs: SessionConfig[] = editRegularSessions.map(s => ({
+          frequency: (s.frequency || 'weekly') as 'weekly' | 'biweekly' | 'monthly',
+          day_of_week: s.day_of_week || 1,
+          start_time: s.start_time,
+          end_time: s.end_time,
+        }));
+
+        const generated = generateRegularDates(currentYear, editOperationMonths, sessionConfigs);
+        generated.forEach((d) => {
+          const sessionId = insertedSessions?.[d.session_index]?.id;
+          datesToInsert.push({
+            course_id: course.id,
+            session_id: sessionId || null,
+            class_date: d.class_date,
+            start_time: d.start_time,
+            end_time: d.end_time,
+            is_cancelled: false, is_makeup: false,
+          });
+        });
+      } else {
+        editIrregularSessions.forEach((s, idx) => {
+          const sessionId = insertedSessions?.[idx]?.id;
+          datesToInsert.push({
+            course_id: course.id,
+            session_id: sessionId || null,
+            class_date: s.specific_date,
+            start_time: s.start_time,
+            end_time: s.end_time,
+            is_cancelled: false, is_makeup: false,
+          });
+        });
+      }
+
+      if (datesToInsert.length > 0) {
+        await supabase.from('course_dates').insert(datesToInsert);
+      }
+
+      alert(`일정이 수정되고 출석부가 다시 생성되었습니다.\n총 ${datesToInsert.length}개의 수업 날짜가 등록되었습니다.`);
+    } else {
+      alert('일정 정보만 저장되었습니다. (출석부는 변경되지 않음)');
+    }
+
+    // 화면 새로고침
+    setCourse({
+      ...course,
+      operation_type: editOperationType,
+      operation_months: editOperationType === 'regular' ? editOperationMonths.join(',') : null,
+    });
+    reloadSessions();
+    setScheduleEditing(false);
+  }
+
+  function handleCancelSchedule() {
+    setEditOperationType(course.operation_type as 'regular' | 'irregular');
+    setEditOperationMonths(course.operation_months ? course.operation_months.split(',').filter(Boolean).map(Number) : [...ALL_MONTHS]);
+    setEditRegularSessions(
+      course.operation_type === 'regular' && sessions.length > 0
+        ? sessions.map(s => ({
+            frequency: s.frequency || 'weekly',
+            day_of_week: s.day_of_week || 1,
+            start_time: s.start_time,
+            end_time: s.end_time,
+          }))
+        : [{ frequency: 'weekly', day_of_week: 1, start_time: '10:00', end_time: '11:30' }]
+    );
+    setEditIrregularSessions(
+      course.operation_type === 'irregular' && sessions.length > 0
+        ? sessions.map(s => ({
+            specific_date: s.specific_date,
+            start_time: s.start_time,
+            end_time: s.end_time,
+          }))
+        : [{ specific_date: '', start_time: '10:00', end_time: '11:30' }]
+    );
+    setScheduleEditing(false);
+  }
+
+  // ============================================
+  // 수강신청 관련 함수들
+  // ============================================
+  async function handleSearchMember() {
+    if (!searchQuery.trim()) { setSearchResults([]); return; }
     setSearching(true);
     const q = searchQuery.trim();
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('members')
       .select('id, name, phone, birth_date, region_type')
       .or(`name.ilike.%${q}%,phone.ilike.%${q}%`)
       .limit(20);
-
-    if (error) {
-      console.error('검색 실패:', error);
-      setSearchResults([]);
-    } else {
-      setSearchResults(data || []);
-    }
+    setSearchResults(data || []);
     setSearching(false);
   }
 
   async function handleEnroll(memberId: number, memberName: string) {
-    // 이미 신청한 회원인지 확인
     if (enrolledMemberIds.has(memberId)) {
       const existing = enrollments.find(e => e.member_id === memberId);
       if (existing?.status === 'ended') {
-        if (!confirm(`${memberName}님은 이전에 이 강좌를 수강하셨습니다 (수강종료). 다시 신청하시겠습니까?`)) return;
-        // 종료된 거 재활성화
+        if (!confirm(`${memberName}님은 이전에 이 강좌를 수강하셨습니다. 다시 신청하시겠습니까?`)) return;
         const status = isFull ? 'waiting' : 'active';
         const waitingOrder = status === 'waiting' ? (waitingList.length + 1) : null;
-        const { error } = await supabase
-          .from('enrollments')
-          .update({
-            status,
-            waiting_order: waitingOrder,
-            enrolled_at: new Date().toISOString(),
-            ended_at: null,
-          })
-          .eq('id', existing.id);
-        if (error) {
-          alert('처리 실패: ' + error.message);
-          return;
-        }
+        await supabase.from('enrollments').update({
+          status, waiting_order: waitingOrder,
+          enrolled_at: new Date().toISOString(), ended_at: null,
+        }).eq('id', existing.id);
         alert(`${memberName}님이 ${status === 'waiting' ? '대기 명단에 추가' : '수강신청'}되었습니다!`);
         reloadEnrollments();
         return;
@@ -171,17 +432,11 @@ export default function CourseDetailClient({
 
     const status = isFull ? 'waiting' : 'active';
     const waitingOrder = status === 'waiting' ? (waitingList.length + 1) : null;
-
     const { error } = await supabase.from('enrollments').insert([{
-      member_id: memberId,
-      course_id: course.id,
-      status,
-      waiting_order: waitingOrder,
+      member_id: memberId, course_id: course.id, status, waiting_order: waitingOrder,
     }]);
-
-    if (error) {
-      alert('수강신청 실패: ' + error.message);
-    } else {
+    if (error) alert('수강신청 실패: ' + error.message);
+    else {
       alert(`${memberName}님이 ${status === 'waiting' ? `대기 ${waitingOrder}순위에 추가` : '수강신청'}되었습니다!`);
       reloadEnrollments();
     }
@@ -189,12 +444,9 @@ export default function CourseDetailClient({
 
   async function handleChangeStatus(e: Enrollment, newStatus: EnrollmentStatus) {
     const memberName = e.members?.name || '회원';
-    const statusLabel = STATUS_LABELS[newStatus];
-
-    if (!confirm(`${memberName}님을 "${statusLabel}" 상태로 변경하시겠습니까?`)) return;
+    if (!confirm(`${memberName}님을 "${STATUS_LABELS[newStatus]}" 상태로 변경하시겠습니까?`)) return;
 
     const updates: any = { status: newStatus };
-
     if (newStatus === 'ended') {
       updates.ended_at = new Date().toISOString();
       updates.waiting_order = null;
@@ -203,11 +455,7 @@ export default function CourseDetailClient({
       updates.waiting_order = null;
     } else if (newStatus === 'active') {
       updates.waiting_order = null;
-      // 일시중지에서 재개라면 pause_end 기록
-      if (e.status === 'paused') {
-        updates.pause_end = new Date().toISOString();
-      }
-      // 종료에서 재활성화면 ended_at 초기화
+      if (e.status === 'paused') updates.pause_end = new Date().toISOString();
       if (e.status === 'ended') {
         updates.ended_at = null;
         updates.enrolled_at = new Date().toISOString();
@@ -217,64 +465,45 @@ export default function CourseDetailClient({
     }
 
     const { error } = await supabase.from('enrollments').update(updates).eq('id', e.id);
-
-    if (error) {
-      alert('변경 실패: ' + error.message);
-    } else {
-      reloadEnrollments();
-    }
+    if (error) alert('변경 실패: ' + error.message);
+    else reloadEnrollments();
   }
 
   async function handleMoveWaitingOrder(e: Enrollment, direction: 'up' | 'down') {
     const currentOrder = e.waiting_order || 0;
     const targetOrder = direction === 'up' ? currentOrder - 1 : currentOrder + 1;
-
     if (targetOrder < 1 || targetOrder > waitingList.length) return;
-
     const target = waitingList.find(w => w.waiting_order === targetOrder);
     if (!target) return;
-
-    // 순서 바꾸기
     await supabase.from('enrollments').update({ waiting_order: targetOrder }).eq('id', e.id);
     await supabase.from('enrollments').update({ waiting_order: currentOrder }).eq('id', target.id);
-
     reloadEnrollments();
   }
 
-  async function handleDelete(e: Enrollment) {
+  async function handleDeleteEnrollment(e: Enrollment) {
     const memberName = e.members?.name || '회원';
-    if (!confirm(`${memberName}님의 수강 정보를 완전히 삭제하시겠습니까?\n(취소가 아닌 완전 삭제입니다)`)) return;
-
+    if (!confirm(`${memberName}님의 수강 정보를 완전히 삭제하시겠습니까?`)) return;
     const { error } = await supabase.from('enrollments').delete().eq('id', e.id);
-
-    if (error) {
-      alert('삭제 실패: ' + error.message);
-    } else {
-      reloadEnrollments();
-    }
+    if (error) alert('삭제 실패: ' + error.message);
+    else reloadEnrollments();
   }
 
+  // ============================================
+  // 강좌 종료/삭제
+  // ============================================
   async function handleToggleActive() {
     const action = course.is_active ? '종료' : '운영중';
     if (!confirm(`${course.name} 강좌를 "${action}" 상태로 변경하시겠습니까?`)) return;
-
     const { error } = await supabase.from('courses').update({ is_active: !course.is_active }).eq('id', course.id);
-
-    if (error) {
-      alert('변경 실패: ' + error.message);
-    } else {
-      setCourse({ ...course, is_active: !course.is_active });
-    }
+    if (error) alert('변경 실패: ' + error.message);
+    else setCourse({ ...course, is_active: !course.is_active });
   }
 
   async function handleDeleteCourse() {
     if (!confirm(`정말 "${course.name}" 강좌를 완전히 삭제하시겠습니까?\n\n관련된 모든 세션, 수업 날짜, 수강신청도 함께 삭제됩니다.`)) return;
-
     const { error } = await supabase.from('courses').delete().eq('id', course.id);
-
-    if (error) {
-      alert('삭제 실패: ' + error.message);
-    } else {
+    if (error) alert('삭제 실패: ' + error.message);
+    else {
       alert('강좌가 삭제되었습니다');
       router.push('/courses');
     }
@@ -285,78 +514,276 @@ export default function CourseDetailClient({
       <Link href="/courses" style={{ color: '#666', fontSize: 13, textDecoration: 'none' }}>← 강좌 목록으로</Link>
       <h1 style={{ fontSize: 22, marginTop: 12, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {course.name}
-        <span style={{ ...badgeStyle(CATEGORY_COLORS[course.category] || '#666'), fontSize: 12 }}>
-          {course.category}
-        </span>
+        <span style={{ ...badgeStyle(CATEGORY_COLORS[course.category] || '#666'), fontSize: 12 }}>{course.category}</span>
         {!course.is_active && (
           <span style={{ fontSize: 11, padding: '3px 10px', background: '#eee', color: '#888', borderRadius: 4, fontWeight: 'normal' }}>종료</span>
         )}
       </h1>
 
-      {/* 강좌 정보 */}
+      {/* 강좌 기본 정보 */}
       <div style={{ background: 'white', borderRadius: 12, padding: 24, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
           <h2 style={{ fontSize: 16, margin: 0 }}>강좌 정보</h2>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={handleToggleActive} style={secondaryBtnStyle}>
-              {course.is_active ? '종료 처리' : '재개'}
-            </button>
-            <button onClick={handleDeleteCourse} style={dangerBtnStyle}>강좌 삭제</button>
+          {!basicEditing ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setBasicEditing(true)} style={primaryBtnStyle}>수정</button>
+              <button onClick={handleToggleActive} style={secondaryBtnStyle}>
+                {course.is_active ? '종료 처리' : '재개'}
+              </button>
+              <button onClick={handleDeleteCourse} style={dangerBtnStyle}>강좌 삭제</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleSaveBasic} style={primaryBtnStyle}>저장</button>
+              <button onClick={handleCancelBasic} style={secondaryBtnStyle}>취소</button>
+            </div>
+          )}
+        </div>
+
+        {!basicEditing ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, fontSize: 14 }}>
+            <InfoRow label="강좌구분" value={course.category} />
+            <InfoRow label="강사" value={course.instructor_id ? instructorMap.get(course.instructor_id) || '-' : '미정'} />
+            <InfoRow label="강의실" value={course.classroom} />
+            <InfoRow label="정원" value={`${course.capacity}명 (현재 ${activeCount}명)`} />
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={labelStyle}>수강료</label>
+              <div style={{ fontSize: 14, marginTop: 2 }}>
+                {course.is_free ? (<span style={badgeStyle('#1D9E75')}>무료</span>) : (
+                  <span>중구민 <strong>{course.fee_jung_gu.toLocaleString()}원</strong> / 타구민 <strong>{course.fee_other.toLocaleString()}원</strong></span>
+                )}
+              </div>
+            </div>
+            {course.memo && (
+              <div style={{ gridColumn: '1 / -1' }}><InfoRow label="메모" value={course.memo} /></div>
+            )}
           </div>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, fontSize: 14 }}>
-          <InfoRow label="강사" value={course.instructor_id ? instructorMap.get(course.instructor_id) || '-' : '미정'} />
-          <InfoRow label="강의실" value={course.classroom} />
-          <InfoRow label="정원" value={`${course.capacity}명 (현재 ${activeCount}명)`} />
-        </div>
-
-        {course.operation_type === 'regular' && (
-          <div style={{ marginTop: 12 }}>
-            <label style={labelStyle}>운영월</label>
-            <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
-                <span key={m} style={{
-                  padding: '4px 10px',
-                  background: operationMonthsArr.includes(m) ? '#1D9E75' : '#eee',
-                  color: operationMonthsArr.includes(m) ? 'white' : '#aaa',
-                  borderRadius: 4, fontSize: 12,
-                }}>{m}월</span>
-              ))}
+        ) : (
+          <div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 16, marginBottom: 12 }}>
+              <div>
+                <label style={labelStyle}>강좌구분 *</label>
+                <select value={editCategory} onChange={(e) => setEditCategory(e.target.value)} style={inputStyle}>
+                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>강좌명 *</label>
+                <input value={editName} onChange={(e) => setEditName(e.target.value)} style={inputStyle} />
+              </div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelStyle}>강사</label>
+              <select value={editInstructorId} onChange={(e) => setEditInstructorId(e.target.value)} style={inputStyle}>
+                <option value="">(미정)</option>
+                {activeInstructors.map(i => (
+                  <option key={i.id} value={i.id}>{i.name}{!i.is_active && ' (비활동)'}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
+              <div>
+                <label style={labelStyle}>강의실</label>
+                <input value={editClassroom} onChange={(e) => setEditClassroom(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>정원</label>
+                <input value={editCapacity} onChange={(e) => setEditCapacity(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
+              </div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', marginBottom: 8 }}>
+                <input type="checkbox" checked={editIsFree} onChange={(e) => setEditIsFree(e.target.checked)} />
+                <strong>무료 강좌</strong>
+              </label>
+              {!editIsFree && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <div>
+                    <label style={labelStyle}>중구민 수강료</label>
+                    <input value={editFeeJungGu} onChange={(e) => setEditFeeJungGu(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>타구민 수강료</label>
+                    <input value={editFeeOther} onChange={(e) => setEditFeeOther(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
+                  </div>
+                </div>
+              )}
+            </div>
+            <div>
+              <label style={labelStyle}>메모</label>
+              <textarea value={editMemo} onChange={(e) => setEditMemo(e.target.value)} style={{ ...inputStyle, minHeight: 60, fontFamily: 'inherit' }} />
             </div>
           </div>
         )}
+      </div>
 
-        <div style={{ marginTop: 12 }}>
-          <label style={labelStyle}>
-            {course.operation_type === 'regular' ? '수업 세션' : '수업 날짜'} ({sessions.length}개)
-          </label>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
-            {sessions.map((s, idx) => (
-              <span key={s.id} style={{
-                padding: '4px 10px', background: '#fafafa',
-                border: '1px solid #eee', borderRadius: 4, fontSize: 12,
-              }}>
-                {course.operation_type === 'regular' ? (
-                  <>{s.frequency ? FREQUENCY_LABELS[s.frequency] : ''} {s.day_of_week ? DAY_LABELS[s.day_of_week] : ''} {s.start_time}~{s.end_time}</>
-                ) : (
-                  <>{s.specific_date} {s.start_time}~{s.end_time}</>
-                )}
-              </span>
-            ))}
-          </div>
+      {/* 수업 일정 (세션) */}
+      <div style={{ background: 'white', borderRadius: 12, padding: 24, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h2 style={{ fontSize: 16, margin: 0 }}>
+            {course.operation_type === 'regular' ? '수업 일정 (정기)' : '수업 날짜 (비정기)'}
+          </h2>
+          {!scheduleEditing ? (
+            <button onClick={() => setScheduleEditing(true)} style={primaryBtnStyle}>일정 수정</button>
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleSaveSchedule} style={primaryBtnStyle}>저장</button>
+              <button onClick={handleCancelSchedule} style={secondaryBtnStyle}>취소</button>
+            </div>
+          )}
         </div>
 
-        <div style={{ marginTop: 12 }}>
-          <label style={labelStyle}>수강료</label>
-          <div style={{ fontSize: 14, marginTop: 2 }}>
-            {course.is_free ? (
-              <span style={badgeStyle('#1D9E75')}>무료</span>
+        {!scheduleEditing ? (
+          <>
+            {course.operation_type === 'regular' && (
+              <div style={{ marginBottom: 12 }}>
+                <label style={labelStyle}>운영월</label>
+                <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                  {ALL_MONTHS.map((m) => (
+                    <span key={m} style={{
+                      padding: '4px 10px',
+                      background: operationMonthsArr.includes(m) ? '#1D9E75' : '#eee',
+                      color: operationMonthsArr.includes(m) ? 'white' : '#aaa',
+                      borderRadius: 4, fontSize: 12,
+                    }}>{m}월</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <label style={labelStyle}>{course.operation_type === 'regular' ? '세션' : '날짜'} ({sessions.length}개)</label>
+            {sessions.length === 0 ? (
+              <p style={{ color: '#888', fontSize: 13 }}>등록된 세션이 없습니다.</p>
             ) : (
-              <span>중구민 <strong>{course.fee_jung_gu.toLocaleString()}원</strong> / 타구민 <strong>{course.fee_other.toLocaleString()}원</strong></span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+                {sessions.map((s, idx) => (
+                  <div key={s.id} style={{
+                    padding: 10, background: '#fafafa', borderRadius: 6,
+                    fontSize: 13, display: 'flex', alignItems: 'center', gap: 12,
+                  }}>
+                    <span style={{ color: '#888', fontSize: 11, width: 24 }}>#{idx + 1}</span>
+                    {course.operation_type === 'regular' ? (
+                      <>
+                        <span><strong>{s.frequency ? FREQUENCY_LABELS[s.frequency] : ''}</strong></span>
+                        <span><strong>{s.day_of_week ? DAY_LABELS[s.day_of_week] : ''}요일</strong></span>
+                        <span style={{ color: '#666' }}>{s.start_time} ~ {s.end_time}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span><strong>{s.specific_date}</strong></span>
+                        <span style={{ color: '#666' }}>{s.start_time} ~ {s.end_time}</span>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          // 일정 수정 모드
+          <div>
+            <div style={{
+              padding: 12, background: '#FFF8E1', border: '1px solid #FFE082',
+              borderRadius: 6, marginBottom: 16, fontSize: 12, color: '#5D4037',
+            }}>
+              ⚠️ 일정 변경 시 저장할 때 출석부 재생성 여부를 물어봅니다.
+            </div>
+
+            <label style={labelStyle}>운영구분 *</label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              <button type="button" onClick={() => setEditOperationType('regular')} style={{
+                flex: 1, padding: 12,
+                background: editOperationType === 'regular' ? '#185FA5' : 'white',
+                color: editOperationType === 'regular' ? 'white' : '#666',
+                border: '1px solid ' + (editOperationType === 'regular' ? '#185FA5' : '#ddd'),
+                borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 500,
+              }}>📅 정기</button>
+              <button type="button" onClick={() => setEditOperationType('irregular')} style={{
+                flex: 1, padding: 12,
+                background: editOperationType === 'irregular' ? '#185FA5' : 'white',
+                color: editOperationType === 'irregular' ? 'white' : '#666',
+                border: '1px solid ' + (editOperationType === 'irregular' ? '#185FA5' : '#ddd'),
+                borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 500,
+              }}>🎯 비정기</button>
+            </div>
+
+            {editOperationType === 'regular' && (
+              <div>
+                <label style={labelStyle}>운영월</label>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 16 }}>
+                  {ALL_MONTHS.map((m) => (
+                    <button key={m} type="button" onClick={() => toggleEditMonth(m)} style={{
+                      width: 48, padding: 8,
+                      background: editOperationMonths.includes(m) ? '#1D9E75' : 'white',
+                      color: editOperationMonths.includes(m) ? 'white' : '#888',
+                      border: '1px solid #ddd', borderRadius: 6,
+                      cursor: 'pointer', fontSize: 12,
+                    }}>{m}월</button>
+                  ))}
+                </div>
+
+                <label style={labelStyle}>수업 세션</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
+                  {editRegularSessions.map((session, idx) => (
+                    <div key={idx} style={{
+                      display: 'flex', gap: 8, alignItems: 'center',
+                      padding: 10, background: 'white', borderRadius: 6, border: '1px solid #eee', flexWrap: 'wrap',
+                    }}>
+                      <span style={{ fontSize: 12, color: '#888', width: 30 }}>#{idx + 1}</span>
+                      <select value={session.frequency} onChange={(e) => updateRegularSession(idx, 'frequency', e.target.value)} style={{ ...inputStyle, width: 100 }}>
+                        {FREQUENCIES.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                      </select>
+                      <select value={session.day_of_week} onChange={(e) => updateRegularSession(idx, 'day_of_week', parseInt(e.target.value))} style={{ ...inputStyle, width: 90 }}>
+                        {DAYS.map(d => <option key={d.value} value={d.value}>{d.label}요일</option>)}
+                      </select>
+                      <input type="time" value={session.start_time} onChange={(e) => updateRegularSession(idx, 'start_time', e.target.value)} style={{ ...inputStyle, width: 110 }} />
+                      <span style={{ fontSize: 12, color: '#888' }}>~</span>
+                      <input type="time" value={session.end_time} onChange={(e) => updateRegularSession(idx, 'end_time', e.target.value)} style={{ ...inputStyle, width: 110 }} />
+                      <button type="button" onClick={() => removeRegularSession(idx)} style={{
+                        padding: '6px 10px', background: 'white', border: '1px solid #ddd',
+                        borderRadius: 4, color: '#A32D2D', cursor: 'pointer', fontSize: 12,
+                      }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" onClick={addRegularSession} style={{
+                  padding: '8px 14px', background: 'white',
+                  border: '1px dashed #185FA5', color: '#185FA5',
+                  borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                }}>+ 세션 추가</button>
+              </div>
+            )}
+
+            {editOperationType === 'irregular' && (
+              <div>
+                <label style={labelStyle}>수업 날짜</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
+                  {editIrregularSessions.map((session, idx) => (
+                    <div key={idx} style={{
+                      display: 'flex', gap: 8, alignItems: 'center',
+                      padding: 10, background: 'white', borderRadius: 6, border: '1px solid #eee',
+                    }}>
+                      <span style={{ fontSize: 12, color: '#888', width: 30 }}>#{idx + 1}</span>
+                      <input type="date" value={session.specific_date || ''} onChange={(e) => updateIrregularSession(idx, 'specific_date', e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+                      <input type="time" value={session.start_time} onChange={(e) => updateIrregularSession(idx, 'start_time', e.target.value)} style={{ ...inputStyle, width: 110 }} />
+                      <span style={{ fontSize: 12, color: '#888' }}>~</span>
+                      <input type="time" value={session.end_time} onChange={(e) => updateIrregularSession(idx, 'end_time', e.target.value)} style={{ ...inputStyle, width: 110 }} />
+                      <button type="button" onClick={() => removeIrregularSession(idx)} style={{
+                        padding: '6px 10px', background: 'white', border: '1px solid #ddd',
+                        borderRadius: 4, color: '#A32D2D', cursor: 'pointer', fontSize: 12,
+                      }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" onClick={addIrregularSession} style={{
+                  padding: '8px 14px', background: 'white',
+                  border: '1px dashed #185FA5', color: '#185FA5',
+                  borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                }}>+ 날짜 추가</button>
+              </div>
             )}
           </div>
-        </div>
+        )}
       </div>
 
       {/* 수강생 명단 */}
@@ -372,24 +799,14 @@ export default function CourseDetailClient({
         </div>
 
         {showEnrollForm && (
-          <div style={{
-            background: '#f9f9f9', padding: 16, borderRadius: 8, marginBottom: 16, border: '1px solid #eee',
-          }}>
+          <div style={{ background: '#f9f9f9', padding: 16, borderRadius: 8, marginBottom: 16, border: '1px solid #eee' }}>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 8px' }}>회원을 검색해서 수강신청을 추가하세요</p>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearchMember()}
-                placeholder="이름 또는 연락처로 검색"
-                style={{ flex: 1, ...inputStyle }}
-              />
+              <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearchMember()} placeholder="이름 또는 연락처로 검색" style={{ flex: 1, ...inputStyle }} />
               <button onClick={handleSearchMember} style={primaryBtnStyle}>검색</button>
             </div>
 
-            {searching ? (
-              <p style={{ fontSize: 13, color: '#888' }}>검색 중...</p>
+            {searching ? (<p style={{ fontSize: 13, color: '#888' }}>검색 중...</p>
             ) : searchResults.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
                 {searchResults.map((m) => {
@@ -407,19 +824,14 @@ export default function CourseDetailClient({
                         </span>
                       </div>
                       {alreadyEnrolled && existing?.status !== 'ended' ? (
-                        <span style={{ fontSize: 12, color: '#888' }}>
-                          이미 등록됨 ({STATUS_LABELS[existing!.status]})
-                        </span>
+                        <span style={{ fontSize: 12, color: '#888' }}>이미 등록됨 ({STATUS_LABELS[existing!.status]})</span>
                       ) : (
-                        <button
-                          onClick={() => handleEnroll(m.id, m.name)}
-                          style={{
-                            padding: '6px 14px',
-                            background: isFull ? '#BA7517' : '#185FA5',
-                            color: 'white', border: 'none', borderRadius: 4,
-                            cursor: 'pointer', fontSize: 12,
-                          }}
-                        >
+                        <button onClick={() => handleEnroll(m.id, m.name)} style={{
+                          padding: '6px 14px',
+                          background: isFull ? '#BA7517' : '#185FA5',
+                          color: 'white', border: 'none', borderRadius: 4,
+                          cursor: 'pointer', fontSize: 12,
+                        }}>
                           {alreadyEnrolled ? '재신청' : (isFull ? '대기 등록' : '수강신청')}
                         </button>
                       )}
@@ -433,7 +845,6 @@ export default function CourseDetailClient({
           </div>
         )}
 
-        {/* 수강중/일시중지 명단 */}
         {activeList.length === 0 ? (
           <p style={{ color: '#888', fontSize: 13 }}>아직 수강생이 없습니다.</p>
         ) : (
@@ -458,9 +869,7 @@ export default function CourseDetailClient({
                   </td>
                   <td style={tdStyle}>{e.members?.phone || '-'}</td>
                   <td style={tdStyle}>{e.members?.region_type || '-'}</td>
-                  <td style={tdStyle}>
-                    <span style={badgeStyle(STATUS_COLORS[e.status])}>{STATUS_LABELS[e.status]}</span>
-                  </td>
+                  <td style={tdStyle}><span style={badgeStyle(STATUS_COLORS[e.status])}>{STATUS_LABELS[e.status]}</span></td>
                   <td style={tdStyle}>{e.enrolled_at?.substring(0, 10)}</td>
                   <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                     {e.status === 'active' && (
@@ -469,10 +878,8 @@ export default function CourseDetailClient({
                         <button onClick={() => handleChangeStatus(e, 'ended')} style={smallBtnStyle}>수강종료</button>
                       </>
                     )}
-                    {e.status === 'paused' && (
-                      <button onClick={() => handleChangeStatus(e, 'active')} style={smallBtnStyle}>재개</button>
-                    )}
-                    <button onClick={() => handleDelete(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
+                    {e.status === 'paused' && (<button onClick={() => handleChangeStatus(e, 'active')} style={smallBtnStyle}>재개</button>)}
+                    <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
                   </td>
                 </tr>
               ))}
@@ -480,7 +887,6 @@ export default function CourseDetailClient({
           </table>
         )}
 
-        {/* 대기 명단 */}
         {waitingList.length > 0 && (
           <div style={{ marginTop: 16 }}>
             <h3 style={{ fontSize: 14, margin: '0 0 8px', color: '#BA7517' }}>⏳ 대기 명단 ({waitingList.length}명)</h3>
@@ -497,31 +903,17 @@ export default function CourseDetailClient({
               <tbody>
                 {waitingList.map((e, idx) => (
                   <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                    <td style={tdStyle}><strong style={{ color: '#BA7517' }}>{e.waiting_order}</strong></td>
                     <td style={tdStyle}>
-                      <strong style={{ color: '#BA7517' }}>{e.waiting_order}</strong>
-                    </td>
-                    <td style={tdStyle}>
-                      <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
-                        {e.members?.name}
-                      </Link>
+                      <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{e.members?.name}</Link>
                     </td>
                     <td style={tdStyle}>{e.members?.phone || '-'}</td>
                     <td style={tdStyle}>{e.enrolled_at?.substring(0, 10)}</td>
                     <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                      <button
-                        onClick={() => handleMoveWaitingOrder(e, 'up')}
-                        disabled={idx === 0}
-                        style={{ ...smallBtnStyle, opacity: idx === 0 ? 0.3 : 1 }}
-                      >▲</button>
-                      <button
-                        onClick={() => handleMoveWaitingOrder(e, 'down')}
-                        disabled={idx === waitingList.length - 1}
-                        style={{ ...smallBtnStyle, opacity: idx === waitingList.length - 1 ? 0.3 : 1 }}
-                      >▼</button>
-                      <button onClick={() => handleChangeStatus(e, 'active')} style={smallBtnStyle}>
-                        수강전환
-                      </button>
-                      <button onClick={() => handleDelete(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
+                      <button onClick={() => handleMoveWaitingOrder(e, 'up')} disabled={idx === 0} style={{ ...smallBtnStyle, opacity: idx === 0 ? 0.3 : 1 }}>▲</button>
+                      <button onClick={() => handleMoveWaitingOrder(e, 'down')} disabled={idx === waitingList.length - 1} style={{ ...smallBtnStyle, opacity: idx === waitingList.length - 1 ? 0.3 : 1 }}>▼</button>
+                      <button onClick={() => handleChangeStatus(e, 'active')} style={smallBtnStyle}>수강전환</button>
+                      <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
                     </td>
                   </tr>
                 ))}
@@ -530,12 +922,9 @@ export default function CourseDetailClient({
           </div>
         )}
 
-        {/* 수강종료 명단 (접혀있음) */}
         {endedList.length > 0 && (
           <details style={{ marginTop: 16 }}>
-            <summary style={{ cursor: 'pointer', fontSize: 13, color: '#888' }}>
-              수강종료 명단 ({endedList.length}명) - 클릭해서 보기
-            </summary>
+            <summary style={{ cursor: 'pointer', fontSize: 13, color: '#888' }}>수강종료 명단 ({endedList.length}명) - 클릭해서 보기</summary>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 8 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
@@ -549,15 +938,13 @@ export default function CourseDetailClient({
                 {endedList.map((e) => (
                   <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0', opacity: 0.7 }}>
                     <td style={tdStyle}>
-                      <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
-                        {e.members?.name}
-                      </Link>
+                      <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{e.members?.name}</Link>
                     </td>
                     <td style={tdStyle}>{e.members?.phone || '-'}</td>
                     <td style={tdStyle}>{e.ended_at?.substring(0, 10)}</td>
                     <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                       <button onClick={() => handleChangeStatus(e, 'active')} style={smallBtnStyle}>재신청</button>
-                      <button onClick={() => handleDelete(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
+                      <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
                     </td>
                   </tr>
                 ))}
@@ -567,7 +954,6 @@ export default function CourseDetailClient({
         )}
       </div>
 
-      {/* 출석부 보기 */}
       <Link href={`/courses/${course.id}/dates`} style={{
         display: 'block', padding: 20,
         background: '#E6F1FB', border: '1px solid #B5D4F4',
@@ -576,9 +962,7 @@ export default function CourseDetailClient({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>📅 수업 날짜 / 출석부 관리</h3>
-            <p style={{ fontSize: 13, margin: 0, color: '#6E7E97' }}>
-              수업 날짜 확인, 휴강·보강 처리
-            </p>
+            <p style={{ fontSize: 13, margin: 0, color: '#6E7E97' }}>수업 날짜 확인, 휴강·보강 처리</p>
           </div>
           <span style={{ fontSize: 18 }}>→</span>
         </div>
@@ -599,7 +983,7 @@ function InfoRow({ label, value }: { label: string; value: string | null | undef
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, color: '#888', marginBottom: 4 };
 const inputStyle: React.CSSProperties = {
   padding: '8px 12px', border: '1px solid #ddd', borderRadius: 6,
-  fontSize: 14, boxSizing: 'border-box',
+  fontSize: 14, boxSizing: 'border-box', width: '100%',
 };
 const primaryBtnStyle: React.CSSProperties = {
   padding: '8px 16px', background: '#185FA5', color: 'white',
