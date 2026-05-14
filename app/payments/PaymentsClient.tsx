@@ -6,7 +6,10 @@ import { createClient } from '@/lib/supabase/client';
 import {
   PAYMENT_METHOD_LABELS,
   calculateFee,
+  calculateAnnualFee,
+  isAnnualAvailable,
   parseOperationMonths,
+  isEndedAtMonth,
   type PaymentMethod,
   type EndReason,
 } from '@/lib/payments';
@@ -40,6 +43,8 @@ type Enrollment = {
   course_id: number;
   status: EnrollmentStatus;
   end_reason: EndReason | null;
+  end_from_year: number | null;
+  end_from_month: number | null;
   refund_date: string | null;
   members: Member | null;
 };
@@ -76,9 +81,15 @@ const CATEGORY_COLORS: Record<string, string> = {
   '평등한시민': '#BA7517', '기타': '#666',
 };
 
+// 셀 키 = "courseId-month"
+type CellKey = string;
+function cellKey(courseId: number, month: number): CellKey {
+  return `${courseId}-${month}`;
+}
+
 export default function PaymentsClient({ staffName }: { staffName: string }) {
   const supabase = createClient();
-  const [activeTab, setActiveTab] = useState<TabType>('by-course');
+  const [activeTab, setActiveTab] = useState<TabType>('by-member');
 
   const [loading, setLoading] = useState(true);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -92,32 +103,44 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const [selectedCourseId, setSelectedCourseId] = useState<number | 'all'>('all');
   const [showUnpaidOnly, setShowUnpaidOnly] = useState(false);
 
-  // 회원별 보기 필터
+  // 회원별 보기
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
   const [memberSearchResults, setMemberSearchResults] = useState<MemberSearchResult[]>([]);
   const [selectedMember, setSelectedMember] = useState<MemberSearchResult | null>(null);
   const [memberSearching, setMemberSearching] = useState(false);
 
-  // 결제 모달
+  // 다중 선택 (회원별 보기에서 강좌×월 조합)
+  const [selectedCells, setSelectedCells] = useState<Set<CellKey>>(new Set());
+  const [selectedAnnualCourses, setSelectedAnnualCourses] = useState<Set<number>>(new Set());
+
+  // 일괄 결제 모달
+  const [bulkPayModalOpen, setBulkPayModalOpen] = useState(false);
+  const [bulkPayMethod, setBulkPayMethod] = useState<PaymentMethod>('cash');
+  const [bulkPayDate, setBulkPayDate] = useState(new Date().toISOString().split('T')[0]);
+  const [bulkReceiptNum, setBulkReceiptNum] = useState('');
+  // 셀별로 수정 가능한 금액
+  const [cellAmounts, setCellAmounts] = useState<Record<string, number>>({});
+
+  // 개별 결제 모달 (강좌별 보기에서 사용)
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [editingPayment, setEditingPayment] = useState<{
     enrollment: Enrollment;
     course: Course;
     existing: Payment | null;
+    month: number;
   } | null>(null);
-
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState<PaymentMethod>('cash');
   const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
   const [receiptNum, setReceiptNum] = useState('');
   const [payMemo, setPayMemo] = useState('');
 
-  // 일괄 결제 모달 (회원별)
-  const [bulkPayModalOpen, setBulkPayModalOpen] = useState(false);
-  const [bulkPayMethod, setBulkPayMethod] = useState<PaymentMethod>('cash');
-  const [bulkPayDate, setBulkPayDate] = useState(new Date().toISOString().split('T')[0]);
-  const [bulkReceiptNum, setBulkReceiptNum] = useState('');
-  const [bulkEnrollments, setBulkEnrollments] = useState<Set<number>>(new Set());
+  // 종료 예약 모달
+  const [endScheduleModalOpen, setEndScheduleModalOpen] = useState(false);
+  const [endingEnrollment, setEndingEnrollment] = useState<Enrollment | null>(null);
+  const [endFromMonth, setEndFromMonth] = useState(new Date().getMonth() + 2);
+  const [endReason, setEndReason] = useState<EndReason>('unregistered');
+  const [endMemo, setEndMemo] = useState('');
 
   useEffect(() => {
     loadData();
@@ -131,7 +154,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       supabase
         .from('enrollments')
         .select('*, members(id, name, phone, region_type, is_jung_gu, is_discount_50, is_discount_100)')
-        .in('status', ['active', 'paused']),
+        .in('status', ['active', 'paused', 'ended']),
       supabase.from('payments').select('*').eq('payment_year', selectedYear),
     ]);
 
@@ -151,7 +174,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
   function getEnrollmentsByCourse(courseId: number): Enrollment[] {
     return enrollments
-      .filter(e => e.course_id === courseId)
+      .filter(e => e.course_id === courseId && e.status !== 'ended')
       .sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || ''));
   }
 
@@ -163,12 +186,6 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         const cB = courses.find(c => c.id === b.course_id)?.name || '';
         return cA.localeCompare(cB);
       });
-  }
-
-  function isRefundedBeforeMonth(enrollment: Enrollment, year: number, month: number): boolean {
-    if (!enrollment.refund_date) return false;
-    const monthEnd = new Date(year, month, 0).toISOString().split('T')[0];
-    return enrollment.refund_date < monthEnd;
   }
 
   // 회원 검색
@@ -189,11 +206,240 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setSelectedMember(m);
     setMemberSearchResults([]);
     setMemberSearchQuery('');
+    setSelectedCells(new Set());
+    setSelectedAnnualCourses(new Set());
   }
 
-  // 개별 결제 모달 열기
-  function openPaymentModal(enrollment: Enrollment, course: Course) {
-    const existing = getPayment(enrollment.id, selectedMonth);
+  // 셀 토글 (회원별 보기에서 강좌-월 클릭)
+  function toggleCell(courseId: number, month: number) {
+    const key = cellKey(courseId, month);
+    setSelectedCells(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  // 연납 토글
+  function toggleAnnual(courseId: number) {
+    setSelectedAnnualCourses(prev => {
+      const next = new Set(prev);
+      if (next.has(courseId)) {
+        next.delete(courseId);
+        // 연납 해제 시 그 강좌의 모든 셀 선택 해제
+        const newCells = new Set(selectedCells);
+        for (let m = 1; m <= 12; m++) {
+          newCells.delete(cellKey(courseId, m));
+        }
+        setSelectedCells(newCells);
+      } else {
+        next.add(courseId);
+        // 연납 선택 시 그 강좌의 2~12월 자동 선택 (1월은 OT라 제외)
+        const newCells = new Set(selectedCells);
+        for (let m = 2; m <= 12; m++) {
+          newCells.add(cellKey(courseId, m));
+        }
+        setSelectedCells(newCells);
+      }
+      return next;
+    });
+  }
+
+  // 선택된 셀의 금액 계산
+  function calculateSelectionTotal(): { items: Array<{ courseId: number; courseName: string; month: number; amount: number; isAnnual: boolean }>, total: number } {
+    if (!selectedMember) return { items: [], total: 0 };
+
+    const items: Array<{ courseId: number; courseName: string; month: number; amount: number; isAnnual: boolean }> = [];
+    const processedCells = new Set<CellKey>();
+
+    // 1. 먼저 연납 처리
+    selectedAnnualCourses.forEach(courseId => {
+      const course = courses.find(c => c.id === courseId);
+      if (!course) return;
+      const calc = calculateFee(
+        course.fee_jung_gu, course.fee_other,
+        selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
+        course.is_free
+      );
+      const annualAmount = calculateAnnualFee(calc.amount);
+
+      // 연납에 포함된 월들을 processedCells에 추가
+      for (let m = 2; m <= 12; m++) {
+        processedCells.add(cellKey(courseId, m));
+      }
+
+      items.push({
+        courseId,
+        courseName: course.name,
+        month: 0, // 0은 연납을 의미
+        amount: annualAmount,
+        isAnnual: true,
+      });
+    });
+
+    // 2. 나머지 셀들
+    selectedCells.forEach(key => {
+      if (processedCells.has(key)) return; // 연납에 포함된 셀은 제외
+
+      const [courseIdStr, monthStr] = key.split('-');
+      const courseId = parseInt(courseIdStr, 10);
+      const month = parseInt(monthStr, 10);
+      const course = courses.find(c => c.id === courseId);
+      if (!course) return;
+
+      const calc = calculateFee(
+        course.fee_jung_gu, course.fee_other,
+        selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
+        course.is_free
+      );
+
+      items.push({
+        courseId,
+        courseName: course.name,
+        month,
+        amount: calc.amount,
+        isAnnual: false,
+      });
+    });
+
+    const total = items.reduce((sum, item) => sum + item.amount, 0);
+    return { items, total };
+  }
+
+  // 일괄 결제 모달 열기
+  function openBulkPayModal() {
+    if (!selectedMember) return;
+    const { items } = calculateSelectionTotal();
+    if (items.length === 0) {
+      alert('결제할 항목을 선택하세요');
+      return;
+    }
+
+    // 셀별 금액 초기화 (자동 계산값으로)
+    const initialAmounts: Record<string, number> = {};
+    items.forEach(item => {
+      const key = item.isAnnual ? `annual-${item.courseId}` : `${item.courseId}-${item.month}`;
+      initialAmounts[key] = item.amount;
+    });
+    setCellAmounts(initialAmounts);
+
+    setBulkPayMethod('cash');
+    setBulkPayDate(new Date().toISOString().split('T')[0]);
+    setBulkReceiptNum('');
+    setBulkPayModalOpen(true);
+  }
+
+  // 일괄 결제 저장
+  async function handleBulkSave() {
+    if (!selectedMember) return;
+    const { items } = calculateSelectionTotal();
+    if (items.length === 0) return;
+
+    let hasError = false;
+    let successCount = 0;
+
+    for (const item of items) {
+      const course = courses.find(c => c.id === item.courseId);
+      if (!course) continue;
+
+      const enrollment = enrollments.find(e =>
+        e.member_id === selectedMember.id && e.course_id === item.courseId
+      );
+      if (!enrollment) continue;
+
+      const calc = calculateFee(
+        course.fee_jung_gu, course.fee_other,
+        selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
+        course.is_free
+      );
+
+      if (item.isAnnual) {
+        // 연납: 2~12월 각각 결제 기록 생성 (1월 OT 제외)
+        const totalAmount = cellAmounts[`annual-${item.courseId}`] ?? item.amount;
+        const perMonthAmount = Math.floor(totalAmount / 10);
+
+        for (let m = 2; m <= 12; m++) {
+          const existing = getPayment(enrollment.id, m);
+          const data = {
+            enrollment_id: enrollment.id,
+            payment_year: selectedYear,
+            payment_month: m,
+            amount: perMonthAmount,
+            is_paid: true,
+            paid_at: bulkPayDate,
+            payment_method: bulkPayMethod,
+            receipt_number: bulkReceiptNum || null,
+            is_annual: true,
+            is_free: course.is_free || calc.discountType === 'discount_100',
+            discount_type: calc.discountType,
+            updated_at: new Date().toISOString(),
+          };
+
+          let result;
+          if (existing) {
+            result = await supabase.from('payments').update(data).eq('id', existing.id);
+          } else {
+            result = await supabase.from('payments').insert([data]);
+          }
+
+          if (result.error) {
+            hasError = true;
+            console.error('연납 처리 실패:', result.error);
+          }
+        }
+        successCount++;
+      } else {
+        // 개별 월 결제
+        const existing = getPayment(enrollment.id, item.month);
+        const cellAmount = cellAmounts[`${item.courseId}-${item.month}`] ?? item.amount;
+
+        const data = {
+          enrollment_id: enrollment.id,
+          payment_year: selectedYear,
+          payment_month: item.month,
+          amount: cellAmount,
+          is_paid: true,
+          paid_at: bulkPayDate,
+          payment_method: bulkPayMethod,
+          receipt_number: bulkReceiptNum || null,
+          is_annual: false,
+          is_free: course.is_free || calc.discountType === 'discount_100' || cellAmount === 0,
+          discount_type: calc.discountType,
+          updated_at: new Date().toISOString(),
+        };
+
+        let result;
+        if (existing) {
+          result = await supabase.from('payments').update(data).eq('id', existing.id);
+        } else {
+          result = await supabase.from('payments').insert([data]);
+        }
+
+        if (result.error) {
+          hasError = true;
+          console.error('결제 처리 실패:', result.error);
+        } else {
+          successCount++;
+        }
+      }
+    }
+
+    if (hasError) {
+      alert('일부 결제 처리에 실패했습니다.');
+    } else {
+      alert(`${selectedMember.name}님의 결제가 완료되었습니다.`);
+    }
+
+    setBulkPayModalOpen(false);
+    setSelectedCells(new Set());
+    setSelectedAnnualCourses(new Set());
+    loadData();
+  }
+
+  // 개별 결제 모달 (강좌별 보기에서)
+  function openPaymentModal(enrollment: Enrollment, course: Course, month: number = selectedMonth) {
+    const existing = getPayment(enrollment.id, month);
     const member = enrollment.members;
     if (!member) return;
 
@@ -203,7 +449,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       course.is_free
     );
 
-    setEditingPayment({ enrollment, course, existing });
+    setEditingPayment({ enrollment, course, existing, month });
     setPayAmount(existing?.amount?.toString() || calc.amount.toString());
     setPayMethod(existing?.payment_method || 'cash');
     setPayDate(existing?.paid_at || new Date().toISOString().split('T')[0]);
@@ -214,7 +460,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
   async function handleSavePayment(markPaid: boolean) {
     if (!editingPayment) return;
-    const { enrollment, course, existing } = editingPayment;
+    const { enrollment, course, existing, month } = editingPayment;
     const member = enrollment.members;
     if (!member) return;
 
@@ -227,7 +473,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     const data = {
       enrollment_id: enrollment.id,
       payment_year: selectedYear,
-      payment_month: selectedMonth,
+      payment_month: month,
       amount: parseInt(payAmount, 10) || 0,
       is_paid: markPaid,
       paid_at: markPaid ? payDate : null,
@@ -239,16 +485,14 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       updated_at: new Date().toISOString(),
     };
 
-    let error;
+    let result;
     if (existing) {
-      const res = await supabase.from('payments').update(data).eq('id', existing.id);
-      error = res.error;
+      result = await supabase.from('payments').update(data).eq('id', existing.id);
     } else {
-      const res = await supabase.from('payments').insert([data]);
-      error = res.error;
+      result = await supabase.from('payments').insert([data]);
     }
 
-    if (error) alert('저장 실패: ' + error.message);
+    if (result.error) alert('저장 실패: ' + result.error.message);
     else {
       setPaymentModalOpen(false);
       setEditingPayment(null);
@@ -268,151 +512,115 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     }
   }
 
-  // 회원별 - 일괄 결제 처리
-  function openBulkPayModal() {
-    if (!selectedMember) return;
-    const memberEnrollments = getEnrollmentsByMember(selectedMember.id);
-    const unpaidEnrollments = memberEnrollments.filter(e => {
-      const c = courses.find(cc => cc.id === e.course_id);
-      if (!c) return false;
-      if (!parseOperationMonths(c.operation_months).includes(selectedMonth)) return false;
-      if (isRefundedBeforeMonth(e, selectedYear, selectedMonth)) return false;
-      const p = getPayment(e.id, selectedMonth);
-      if (p?.is_paid) return false;
-      // 자동완료(0원)는 제외
-      const calc = calculateFee(c.fee_jung_gu, c.fee_other, selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100, c.is_free);
-      if (calc.amount === 0) return false;
-      return true;
-    });
-
-    if (unpaidEnrollments.length === 0) {
-      alert('결제할 수 있는 미납 강좌가 없습니다.');
-      return;
-    }
-
-    setBulkEnrollments(new Set(unpaidEnrollments.map(e => e.id)));
-    setBulkPayMethod('cash');
-    setBulkPayDate(new Date().toISOString().split('T')[0]);
-    setBulkReceiptNum('');
-    setBulkPayModalOpen(true);
+  // 종료 예약 모달
+  function openEndScheduleModal(enrollment: Enrollment) {
+    setEndingEnrollment(enrollment);
+    setEndFromMonth(new Date().getMonth() + 2); // 다음 달 기본
+    setEndReason('unregistered');
+    setEndMemo('');
+    setEndScheduleModalOpen(true);
   }
 
-  function toggleBulkEnrollment(eId: number) {
-    setBulkEnrollments(prev => {
-      const next = new Set(prev);
-      if (next.has(eId)) next.delete(eId);
-      else next.add(eId);
-      return next;
-    });
-  }
+  async function handleEndSchedule() {
+    if (!endingEnrollment) return;
+    const memberName = endingEnrollment.members?.name || '회원';
+    const courseName = courses.find(c => c.id === endingEnrollment.course_id)?.name || '강좌';
 
-  async function handleBulkSave() {
-    if (!selectedMember) return;
-    if (bulkEnrollments.size === 0) {
-      alert('결제할 강좌를 선택하세요');
-      return;
+    const updates: any = {
+      end_from_year: selectedYear,
+      end_from_month: endFromMonth,
+      end_reason: endReason,
+    };
+
+    if (endReason === 'refund') {
+      const today = new Date().toISOString().split('T')[0];
+      updates.refund_date = today;
+      updates.refund_memo = endMemo.trim() || null;
     }
 
-    const memberEnrollments = getEnrollmentsByMember(selectedMember.id);
-    const toProcess = memberEnrollments.filter(e => bulkEnrollments.has(e.id));
+    const { error } = await supabase.from('enrollments').update(updates).eq('id', endingEnrollment.id);
 
-    let totalAmount = 0;
-    let hasError = false;
-
-    for (const e of toProcess) {
-      const course = courses.find(c => c.id === e.course_id);
-      if (!course) continue;
-      const calc = calculateFee(
-        course.fee_jung_gu, course.fee_other,
-        selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
-        course.is_free
-      );
-
-      const existing = getPayment(e.id, selectedMonth);
-      const data = {
-        enrollment_id: e.id,
-        payment_year: selectedYear,
-        payment_month: selectedMonth,
-        amount: calc.amount,
-        is_paid: true,
-        paid_at: bulkPayDate,
-        payment_method: bulkPayMethod,
-        receipt_number: bulkReceiptNum || null,
-        is_free: course.is_free || calc.discountType === 'discount_100',
-        discount_type: calc.discountType,
-        updated_at: new Date().toISOString(),
-      };
-
-      totalAmount += calc.amount;
-
-      let result;
-      if (existing) {
-        result = await supabase.from('payments').update(data).eq('id', existing.id);
-      } else {
-        result = await supabase.from('payments').insert([data]);
-      }
-
-      if (result.error) {
-        hasError = true;
-        console.error('결제 처리 실패:', result.error);
-      }
-    }
-
-    if (hasError) {
-      alert('일부 결제 처리에 실패했습니다.');
+    if (error) {
+      alert('처리 실패: ' + error.message);
     } else {
-      alert(`${selectedMember.name}님의 ${toProcess.length}개 강좌 결제가 완료되었습니다.\n총 결제 금액: ${totalAmount.toLocaleString()}원`);
+      alert(`${memberName}님 / ${courseName}\n${selectedYear}년 ${endFromMonth}월부터 수강 종료 예정으로 처리되었습니다.`);
+      setEndScheduleModalOpen(false);
+      setEndingEnrollment(null);
+      loadData();
     }
+  }
 
-    setBulkPayModalOpen(false);
-    loadData();
+  // 종료 예약 취소
+  async function cancelEndSchedule(enrollment: Enrollment) {
+    if (!confirm('수강 종료 예약을 취소하시겠습니까?')) return;
+    const { error } = await supabase.from('enrollments').update({
+      end_from_year: null,
+      end_from_month: null,
+      end_reason: null,
+      refund_date: null,
+      refund_memo: null,
+    }).eq('id', enrollment.id);
+
+    if (error) alert('취소 실패: ' + error.message);
+    else loadData();
   }
 
   const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  const today = new Date();
+  const todayYear = today.getFullYear();
+  const todayMonth = today.getMonth() + 1;
+
+  // 셀이 "과거 또는 현재월"인지 (미납 판정용)
+  function isPastOrCurrent(month: number): boolean {
+    if (selectedYear < todayYear) return true;
+    if (selectedYear > todayYear) return false;
+    return month <= todayMonth;
+  }
 
   // 미납자 목록 (전체 강좌)
   const allUnpaid = (() => {
-    const result: { course: Course; enrollment: Enrollment; waitingCount: number }[] = [];
+    const result: { course: Course; enrollment: Enrollment; waitingCount: number; unpaidMonths: number[] }[] = [];
     courses.forEach(course => {
-      if (!parseOperationMonths(course.operation_months).includes(selectedMonth)) return;
       if (course.is_free) return;
-
-      const courseEnrollments = getEnrollmentsByCourse(course.id);
+      const operationMonths = parseOperationMonths(course.operation_months);
+      const courseEnrollments = enrollments.filter(e => e.course_id === course.id && e.status !== 'ended');
       const waitingCount = enrollments.filter(e => e.course_id === course.id && e.status === 'waiting').length;
 
       courseEnrollments.forEach(e => {
         if (!e.members) return;
-        if (isRefundedBeforeMonth(e, selectedYear, selectedMonth)) return;
-
-        const calc = calculateFee(
-          course.fee_jung_gu, course.fee_other,
-          e.members.is_jung_gu, e.members.is_discount_50, e.members.is_discount_100,
-          course.is_free
-        );
-        if (calc.amount === 0) return;
-
-        const p = getPayment(e.id, selectedMonth);
-        if (!p || !p.is_paid) {
-          result.push({ course, enrollment: e, waitingCount });
+        const unpaidMonths: number[] = [];
+        for (let m = 1; m <= todayMonth; m++) {
+          if (m === 1) continue; // 1월 OT 제외
+          if (!operationMonths.includes(m)) continue;
+          if (isEndedAtMonth(e, selectedYear, m)) continue;
+          const calc = calculateFee(course.fee_jung_gu, course.fee_other, e.members.is_jung_gu, e.members.is_discount_50, e.members.is_discount_100, course.is_free);
+          if (calc.amount === 0) continue;
+          const p = getPayment(e.id, m);
+          if (!p || !p.is_paid) unpaidMonths.push(m);
+        }
+        if (unpaidMonths.length > 0) {
+          result.push({ course, enrollment: e, waitingCount, unpaidMonths });
         }
       });
     });
     return result;
   })();
 
+  const { items: selectionItems, total: selectionTotal } = calculateSelectionTotal();
+
   return (
-    <div style={{ maxWidth: 1200, margin: '40px auto', padding: 20 }}>
+    <div style={{ maxWidth: 1400, margin: '40px auto', padding: 20 }}>
       <Link href="/" style={{ color: '#666', fontSize: 13, textDecoration: 'none' }}>← 홈으로</Link>
       <h1 style={{ fontSize: 22, marginTop: 12, marginBottom: 20 }}>💰 수납 관리</h1>
 
       {/* 탭 */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '2px solid #eee' }}>
-        <TabButton active={activeTab === 'by-course'} onClick={() => setActiveTab('by-course')} label="🎯 강좌별 보기" />
         <TabButton active={activeTab === 'by-member'} onClick={() => setActiveTab('by-member')} label="👤 회원별 보기" />
-        <TabButton active={activeTab === 'unpaid'} onClick={() => setActiveTab('unpaid')} label={`⚠️ 미납자 점검 ${allUnpaid.length > 0 ? `(${allUnpaid.length})` : ''}`} />
+        <TabButton active={activeTab === 'by-course'} onClick={() => setActiveTab('by-course')} label="🎯 강좌별 보기" />
+        <TabButton active={activeTab === 'unpaid'} onClick={() => setActiveTab('unpaid')} label={`⚠️ 미납자 점검${allUnpaid.length > 0 ? ` (${allUnpaid.length})` : ''}`} />
       </div>
 
-      {/* 연/월 선택 (모든 탭 공통) */}
+      {/* 연도 선택 (모든 탭 공통) */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <button onClick={() => setSelectedYear(selectedYear - 1)} style={smallBtnStyle}>◀</button>
@@ -420,18 +628,20 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           <button onClick={() => setSelectedYear(selectedYear + 1)} style={smallBtnStyle}>▶</button>
         </div>
 
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {months.map(m => (
-            <button key={m} onClick={() => setSelectedMonth(m)} style={{
-              padding: '8px 14px',
-              background: selectedMonth === m ? '#185FA5' : 'white',
-              color: selectedMonth === m ? 'white' : '#666',
-              border: '1px solid ' + (selectedMonth === m ? '#185FA5' : '#ddd'),
-              borderRadius: 6, cursor: 'pointer', fontSize: 13,
-              fontWeight: selectedMonth === m ? 500 : 'normal',
-            }}>{m}월</button>
-          ))}
-        </div>
+        {activeTab !== 'by-member' && (
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {months.map(m => (
+              <button key={m} onClick={() => setSelectedMonth(m)} style={{
+                padding: '8px 14px',
+                background: selectedMonth === m ? '#185FA5' : 'white',
+                color: selectedMonth === m ? 'white' : '#666',
+                border: '1px solid ' + (selectedMonth === m ? '#185FA5' : '#ddd'),
+                borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                fontWeight: selectedMonth === m ? 500 : 'normal',
+              }}>{m}월</button>
+            ))}
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -439,7 +649,297 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       ) : (
         <>
           {/* ============================================ */}
-          {/* 탭 1: 강좌별 보기 (기존)                       */}
+          {/* 탭 1: 회원별 보기 (메인)                       */}
+          {/* ============================================ */}
+          {activeTab === 'by-member' && (
+            <>
+              {/* 회원 검색 */}
+              {!selectedMember && (
+                <div style={{ background: 'white', borderRadius: 12, padding: 20, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                  <h3 style={{ fontSize: 14, margin: '0 0 12px' }}>회원 검색</h3>
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                    <input
+                      type="text"
+                      value={memberSearchQuery}
+                      onChange={(e) => setMemberSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSearchMember()}
+                      placeholder="이름 또는 연락처로 검색"
+                      style={{ flex: 1, ...inputStyle }}
+                    />
+                    <button onClick={handleSearchMember} style={primaryBtnStyle}>검색</button>
+                  </div>
+
+                  {memberSearching ? (
+                    <p style={{ fontSize: 13, color: '#888' }}>검색 중...</p>
+                  ) : memberSearchResults.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
+                      {memberSearchResults.map(m => (
+                        <div key={m.id} onClick={() => selectMember(m)} style={{
+                          padding: 10, background: '#f9f9f9', borderRadius: 6,
+                          border: '1px solid #eee', cursor: 'pointer',
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        }}>
+                          <div>
+                            <strong style={{ fontSize: 14 }}>{m.name}</strong>
+                            <span style={{ fontSize: 12, color: '#666', marginLeft: 8 }}>
+                              {m.phone || '-'} · {m.region_type || '-'}
+                            </span>
+                            {m.is_discount_100 && <span style={{ ...badgeStyle('#A32D2D'), marginLeft: 6 }}>100%감면</span>}
+                            {m.is_discount_50 && <span style={{ ...badgeStyle('#BA7517'), marginLeft: 6 }}>50%감면</span>}
+                          </div>
+                          <span style={{ fontSize: 12, color: '#185FA5' }}>선택 →</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {/* 선택된 회원의 연간 수납 현황 */}
+              {selectedMember && (() => {
+                const memberEnrollments = getEnrollmentsByMember(selectedMember.id);
+
+                return (
+                  <div>
+                    {/* 회원 정보 헤더 */}
+                    <div style={{ background: 'white', borderRadius: 12, padding: 20, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                        <div>
+                          <h2 style={{ fontSize: 18, margin: '0 0 4px' }}>
+                            <Link href={`/members/${selectedMember.id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{selectedMember.name}</Link>
+                          </h2>
+                          <div style={{ fontSize: 12, color: '#888' }}>
+                            {selectedMember.phone} · {selectedMember.region_type}
+                            {selectedMember.is_discount_100 && <span style={{ ...badgeStyle('#A32D2D'), marginLeft: 8 }}>100%감면</span>}
+                            {selectedMember.is_discount_50 && <span style={{ ...badgeStyle('#BA7517'), marginLeft: 8 }}>50%감면</span>}
+                          </div>
+                        </div>
+                        <button onClick={() => { setSelectedMember(null); setSelectedCells(new Set()); setSelectedAnnualCourses(new Set()); }} style={smallBtnStyle}>다른 회원 검색</button>
+                      </div>
+                    </div>
+
+                    {/* 강좌별 12개월 그리드 */}
+                    {memberEnrollments.length === 0 ? (
+                      <div style={{ background: 'white', borderRadius: 12, padding: 40, textAlign: 'center', color: '#888' }}>
+                        <p>신청한 강좌가 없습니다.</p>
+                      </div>
+                    ) : (
+                      <>
+                        {memberEnrollments.map(enrollment => {
+                          const course = courses.find(c => c.id === enrollment.course_id);
+                          if (!course) return null;
+
+                          const operationMonths = parseOperationMonths(course.operation_months);
+                          const calc = calculateFee(
+                            course.fee_jung_gu, course.fee_other,
+                            selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
+                            course.is_free
+                          );
+                          const canAnnual = isAnnualAvailable(course.operation_months) && calc.amount > 0;
+                          const isAnnualChecked = selectedAnnualCourses.has(course.id);
+                          const annualAmount = calculateAnnualFee(calc.amount);
+
+                          // 종료 예약 정보
+                          const hasEndSchedule = enrollment.end_from_year && enrollment.end_from_month;
+
+                          return (
+                            <div key={enrollment.id} style={{
+                              background: 'white', borderRadius: 12, padding: 16, marginBottom: 12,
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                            }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                  <Link href={`/courses/${course.id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
+                                    <strong style={{ fontSize: 15 }}>{course.name}</strong>
+                                  </Link>
+                                  <span style={badgeStyle(CATEGORY_COLORS[course.category] || '#666')}>{course.category}</span>
+                                  {course.is_free && <span style={badgeStyle('#1D9E75')}>무료</span>}
+                                  <span style={{ fontSize: 12, color: '#888' }}>
+                                    월 <strong>{calc.amount.toLocaleString()}원</strong>
+                                  </span>
+                                  {hasEndSchedule && (
+                                    <span style={{ ...badgeStyle('#7B3FBF'), fontSize: 11 }}>
+                                      📅 {enrollment.end_from_year}.{enrollment.end_from_month}월부터 종료
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ display: 'flex', gap: 4 }}>
+                                  {hasEndSchedule ? (
+                                    <button onClick={() => cancelEndSchedule(enrollment)} style={smallBtnStyle}>
+                                      종료 예약 취소
+                                    </button>
+                                  ) : (
+                                    <button onClick={() => openEndScheduleModal(enrollment)} style={smallBtnStyle}>
+                                      📅 ○월부터 종료
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* 12개월 + 연납 그리드 */}
+                              <div style={{ display: 'flex', gap: 2, overflowX: 'auto', paddingBottom: 4 }}>
+                                {months.map(month => {
+                                  const isOperating = operationMonths.includes(month);
+                                  const isOTMonth = month === 1; // 1월은 OT
+                                  const isEnded = isEndedAtMonth(enrollment, selectedYear, month);
+                                  const payment = getPayment(enrollment.id, month);
+                                  const isPaid = payment?.is_paid || false;
+                                  const pastOrCurrent = isPastOrCurrent(month);
+                                  const isSelected = selectedCells.has(cellKey(course.id, month));
+                                  const isAnnualHere = isAnnualChecked && month >= 2;
+
+                                  // 상태 결정
+                                  let label = '';
+                                  let bgColor = '#fafafa';
+                                  let textColor = '#666';
+                                  let canSelect = true;
+
+                                  if (!isOperating) {
+                                    label = '-';
+                                    bgColor = '#f0f0f0';
+                                    textColor = '#bbb';
+                                    canSelect = false;
+                                  } else if (isEnded) {
+                                    label = '수강종료';
+                                    bgColor = '#3F3F3F';
+                                    textColor = 'white';
+                                    canSelect = false;
+                                  } else if (isPaid) {
+                                    label = isOTMonth ? '등록 (OT)' : '등록';
+                                    bgColor = '#1D9E75';
+                                    textColor = 'white';
+                                    canSelect = true; // 수정도 가능
+                                  } else if (calc.amount === 0 && pastOrCurrent) {
+                                    // 무료/100%감면이면 자동 등록
+                                    label = '등록';
+                                    bgColor = '#1D9E75';
+                                    textColor = 'white';
+                                  } else if (pastOrCurrent && !isOTMonth) {
+                                    label = '미납';
+                                    bgColor = '#A32D2D';
+                                    textColor = 'white';
+                                  } else {
+                                    label = isOTMonth ? '미등록 (OT)' : '미등록';
+                                    bgColor = '#fafafa';
+                                    textColor = '#888';
+                                  }
+
+                                  const selectedStyle = isSelected ? {
+                                    boxShadow: '0 0 0 3px #185FA5',
+                                  } : {};
+
+                                  return (
+                                    <div
+                                      key={month}
+                                      onClick={() => {
+                                        if (canSelect && !isAnnualHere) toggleCell(course.id, month);
+                                      }}
+                                      style={{
+                                        flex: '1 0 80px',
+                                        minWidth: 70,
+                                        padding: 8,
+                                        background: isAnnualHere ? '#185FA5' : bgColor,
+                                        color: isAnnualHere ? 'white' : textColor,
+                                        borderRadius: 6,
+                                        textAlign: 'center',
+                                        cursor: (canSelect && !isAnnualHere) ? 'pointer' : 'default',
+                                        opacity: isAnnualHere ? 0.7 : 1,
+                                        ...selectedStyle,
+                                      }}
+                                    >
+                                      <div style={{ fontSize: 11, fontWeight: 500 }}>{month}월</div>
+                                      <div style={{ fontSize: 10, marginTop: 2 }}>
+                                        {isAnnualHere ? '연납' : label}
+                                      </div>
+                                      {payment?.is_paid && payment.amount > 0 && (
+                                        <div style={{ fontSize: 9, marginTop: 2, opacity: 0.9 }}>
+                                          {payment.amount.toLocaleString()}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+
+                                {/* 연납 셀 */}
+                                <div
+                                  onClick={() => canAnnual && toggleAnnual(course.id)}
+                                  style={{
+                                    flex: '1 0 100px',
+                                    minWidth: 90,
+                                    padding: 8,
+                                    background: !canAnnual ? '#f0f0f0' : (isAnnualChecked ? '#185FA5' : 'white'),
+                                    color: !canAnnual ? '#bbb' : (isAnnualChecked ? 'white' : '#185FA5'),
+                                    border: '2px solid ' + (!canAnnual ? '#ddd' : '#185FA5'),
+                                    borderRadius: 6,
+                                    textAlign: 'center',
+                                    cursor: canAnnual ? 'pointer' : 'not-allowed',
+                                  }}
+                                >
+                                  <div style={{ fontSize: 11, fontWeight: 500 }}>💳 연납</div>
+                                  <div style={{ fontSize: 10, marginTop: 2 }}>
+                                    {canAnnual ? `${annualAmount.toLocaleString()}` : '불가'}
+                                  </div>
+                                  {canAnnual && (
+                                    <div style={{ fontSize: 9, marginTop: 2, opacity: 0.8 }}>
+                                      ({calc.amount.toLocaleString()}×10개월)
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {!canAnnual && operationMonths.length < 12 && calc.amount > 0 && (
+                                <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
+                                  ℹ️ 연납은 1~12월 전체 운영 강좌만 가능합니다.
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        {/* 선택 요약 + 결제 버튼 */}
+                        {(selectedCells.size > 0 || selectedAnnualCourses.size > 0) && (
+                          <div style={{
+                            position: 'sticky', bottom: 16, zIndex: 10,
+                            background: 'white', borderRadius: 12, padding: 16,
+                            boxShadow: '0 4px 16px rgba(0,0,0,0.1)',
+                            border: '2px solid #185FA5',
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                              <div>
+                                <strong style={{ fontSize: 14 }}>선택한 항목: {selectionItems.length}건</strong>
+                                <span style={{ marginLeft: 16, fontSize: 18, fontWeight: 500, color: '#185FA5' }}>
+                                  총 {selectionTotal.toLocaleString()}원
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <button onClick={() => { setSelectedCells(new Set()); setSelectedAnnualCourses(new Set()); }} style={secondaryBtnStyle}>선택 해제</button>
+                                <button onClick={openBulkPayModal} style={{
+                                  padding: '12px 24px',
+                                  background: '#1D9E75', color: 'white',
+                                  border: 'none', borderRadius: 6, cursor: 'pointer',
+                                  fontSize: 14, fontWeight: 500,
+                                }}>💰 일괄 결제 처리</button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {!selectedMember && memberSearchResults.length === 0 && !memberSearching && (
+                <div style={{ background: 'white', borderRadius: 12, padding: 40, textAlign: 'center', color: '#888', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                  <p style={{ margin: 0 }}>회원을 검색해서 연간 수납 현황을 확인하세요.</p>
+                  <p style={{ fontSize: 12, marginTop: 8 }}>1~12월 그리드에서 원하는 월을 클릭하여 결제 처리할 수 있습니다.</p>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ============================================ */}
+          {/* 탭 2: 강좌별 보기                              */}
           {/* ============================================ */}
           {activeTab === 'by-course' && (
             <>
@@ -467,7 +967,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
                 const unpaidCount = courseEnrollments.filter(e => {
                   if (!isOperating || !e.members) return false;
-                  if (isRefundedBeforeMonth(e, selectedYear, selectedMonth)) return false;
+                  if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
+                  if (selectedMonth === 1) return false; // 1월 OT 제외
                   const calc = calculateFee(course.fee_jung_gu, course.fee_other, e.members.is_jung_gu, e.members.is_discount_50, e.members.is_discount_100, course.is_free);
                   if (calc.amount === 0) return false;
                   const p = getPayment(e.id, selectedMonth);
@@ -477,7 +978,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                 const displayEnrollments = showUnpaidOnly
                   ? courseEnrollments.filter(e => {
                       if (!isOperating || !e.members) return false;
-                      if (isRefundedBeforeMonth(e, selectedYear, selectedMonth)) return false;
+                      if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
+                      if (selectedMonth === 1) return false;
                       const calc = calculateFee(course.fee_jung_gu, course.fee_other, e.members.is_jung_gu, e.members.is_discount_50, e.members.is_discount_100, course.is_free);
                       if (calc.amount === 0) return false;
                       const p = getPayment(e.id, selectedMonth);
@@ -505,12 +1007,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                       </div>
                       <div style={{ fontSize: 12, color: '#888' }}>
                         정원 {course.capacity}명 · 현재 {courseEnrollments.length}명
-                        {!course.is_free && (<span style={{ marginLeft: 8 }}>({course.fee_jung_gu.toLocaleString()}/{course.fee_other.toLocaleString()})</span>)}
                       </div>
                     </div>
 
                     {!isOperating ? (
-                      <p style={{ fontSize: 13, color: '#888', margin: 0, fontStyle: 'italic' }}>{selectedMonth}월에는 운영하지 않는 강좌입니다.</p>
+                      <p style={{ fontSize: 13, color: '#888', margin: 0, fontStyle: 'italic' }}>{selectedMonth}월에는 운영하지 않습니다.</p>
                     ) : displayEnrollments.length === 0 ? (
                       <p style={{ fontSize: 13, color: '#888', margin: 0 }}>{showUnpaidOnly ? '미납자가 없습니다.' : '수강생이 없습니다.'}</p>
                     ) : (
@@ -520,7 +1021,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                             <th style={thStyle}>이름</th>
                             <th style={thStyle}>구분</th>
                             <th style={thStyle}>감면</th>
-                            <th style={thStyle}>{selectedMonth}월 결제</th>
+                            <th style={thStyle}>{selectedMonth}월 상태</th>
                             <th style={thStyle}>금액</th>
                             <th style={thStyle}>방법</th>
                             <th style={thStyle}>결제일</th>
@@ -532,20 +1033,43 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                             const member = e.members;
                             if (!member) return null;
                             const p = getPayment(e.id, selectedMonth);
+                            const isEnded = isEndedAtMonth(e, selectedYear, selectedMonth);
 
-                            if (isRefundedBeforeMonth(e, selectedYear, selectedMonth)) {
+                            if (isEnded) {
                               return (
                                 <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0', opacity: 0.5 }}>
                                   <td style={tdStyle}>
                                     <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{member.name}</Link>
                                   </td>
-                                  <td colSpan={7} style={{ ...tdStyle, color: '#A32D2D', fontSize: 12 }}>({e.refund_date} 환불 처리)</td>
+                                  <td colSpan={7} style={{ ...tdStyle, color: '#3F3F3F', fontSize: 12 }}>
+                                    수강종료
+                                    {e.end_from_year && e.end_from_month && ` (${e.end_from_year}.${e.end_from_month}월부터)`}
+                                    {e.refund_date && ` · 환불: ${e.refund_date}`}
+                                  </td>
                                 </tr>
                               );
                             }
 
                             const calc = calculateFee(course.fee_jung_gu, course.fee_other, member.is_jung_gu, member.is_discount_50, member.is_discount_100, course.is_free);
                             const isAutoComplete = calc.amount === 0;
+                            const pastOrCurrent = isPastOrCurrent(selectedMonth);
+                            const isOTMonth = selectedMonth === 1;
+
+                            let statusLabel = '';
+                            let statusColor = '#888';
+                            if (p?.is_paid) {
+                              statusLabel = '✓ 등록';
+                              statusColor = '#1D9E75';
+                            } else if (isAutoComplete && pastOrCurrent) {
+                              statusLabel = '자동등록';
+                              statusColor = '#1D9E75';
+                            } else if (pastOrCurrent && !isOTMonth) {
+                              statusLabel = '미납';
+                              statusColor = '#A32D2D';
+                            } else {
+                              statusLabel = isOTMonth ? '미등록 (OT)' : '미등록';
+                              statusColor = '#888';
+                            }
 
                             return (
                               <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
@@ -561,16 +1085,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   ) : member.is_discount_50 ? (<span style={badgeStyle('#BA7517')}>50%</span>
                                   ) : '-'}
                                 </td>
-                                <td style={tdStyle}>
-                                  {p?.is_paid ? (<span style={badgeStyle('#1D9E75')}>✓ 완료</span>
-                                  ) : isAutoComplete ? (<span style={badgeStyle('#1D9E75')}>자동완료</span>
-                                  ) : (<span style={badgeStyle('#A32D2D')}>미납</span>)}
-                                </td>
+                                <td style={tdStyle}><span style={badgeStyle(statusColor)}>{statusLabel}</span></td>
                                 <td style={tdStyle}>{p ? p.amount.toLocaleString() : calc.amount.toLocaleString()}원</td>
                                 <td style={tdStyle}>{p?.payment_method ? PAYMENT_METHOD_LABELS[p.payment_method] : '-'}</td>
                                 <td style={tdStyle}>{p?.paid_at || '-'}</td>
                                 <td style={tdStyle}>
-                                  <button onClick={() => openPaymentModal(e, course)} style={smallBtnStyle}>
+                                  <button onClick={() => openPaymentModal(e, course, selectedMonth)} style={smallBtnStyle}>
                                     {p?.is_paid ? '수정' : '결제처리'}
                                   </button>
                                 </td>
@@ -587,211 +1107,19 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           )}
 
           {/* ============================================ */}
-          {/* 탭 2: 회원별 보기                              */}
-          {/* ============================================ */}
-          {activeTab === 'by-member' && (
-            <>
-              {/* 회원 검색 */}
-              <div style={{ background: 'white', borderRadius: 12, padding: 20, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-                <h3 style={{ fontSize: 14, margin: '0 0 12px' }}>회원 검색</h3>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-                  <input
-                    type="text"
-                    value={memberSearchQuery}
-                    onChange={(e) => setMemberSearchQuery(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSearchMember()}
-                    placeholder="이름 또는 연락처로 검색"
-                    style={{ flex: 1, ...inputStyle }}
-                  />
-                  <button onClick={handleSearchMember} style={primaryBtnStyle}>검색</button>
-                </div>
-
-                {memberSearching ? (
-                  <p style={{ fontSize: 13, color: '#888' }}>검색 중...</p>
-                ) : memberSearchResults.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
-                    {memberSearchResults.map(m => (
-                      <div
-                        key={m.id}
-                        onClick={() => selectMember(m)}
-                        style={{
-                          padding: 10, background: '#f9f9f9', borderRadius: 6,
-                          border: '1px solid #eee', cursor: 'pointer',
-                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        }}
-                      >
-                        <div>
-                          <strong style={{ fontSize: 14 }}>{m.name}</strong>
-                          <span style={{ fontSize: 12, color: '#666', marginLeft: 8 }}>
-                            {m.phone || '-'} · {m.region_type || '-'}
-                          </span>
-                          {m.is_discount_100 && <span style={{ ...badgeStyle('#A32D2D'), marginLeft: 6 }}>100%감면</span>}
-                          {m.is_discount_50 && <span style={{ ...badgeStyle('#BA7517'), marginLeft: 6 }}>50%감면</span>}
-                        </div>
-                        <span style={{ fontSize: 12, color: '#185FA5' }}>선택 →</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              {/* 선택된 회원의 결제 화면 */}
-              {selectedMember && (() => {
-                const memberEnrollments = getEnrollmentsByMember(selectedMember.id);
-                const monthlyEnrollments = memberEnrollments.filter(e => {
-                  const c = courses.find(cc => cc.id === e.course_id);
-                  if (!c) return false;
-                  if (!parseOperationMonths(c.operation_months).includes(selectedMonth)) return false;
-                  return true;
-                });
-
-                let totalDue = 0;
-                let totalPaid = 0;
-                monthlyEnrollments.forEach(e => {
-                  const c = courses.find(cc => cc.id === e.course_id);
-                  if (!c) return;
-                  if (isRefundedBeforeMonth(e, selectedYear, selectedMonth)) return;
-                  const calc = calculateFee(c.fee_jung_gu, c.fee_other, selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100, c.is_free);
-                  totalDue += calc.amount;
-                  const p = getPayment(e.id, selectedMonth);
-                  if (p?.is_paid) totalPaid += p.amount;
-                });
-                const remaining = totalDue - totalPaid;
-
-                return (
-                  <div style={{ background: 'white', borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
-                      <div>
-                        <h2 style={{ fontSize: 18, margin: '0 0 4px' }}>
-                          <Link href={`/members/${selectedMember.id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{selectedMember.name}</Link>
-                        </h2>
-                        <div style={{ fontSize: 12, color: '#888' }}>
-                          {selectedMember.phone} · {selectedMember.region_type}
-                          {selectedMember.is_discount_100 && <span style={{ ...badgeStyle('#A32D2D'), marginLeft: 8 }}>100%감면</span>}
-                          {selectedMember.is_discount_50 && <span style={{ ...badgeStyle('#BA7517'), marginLeft: 8 }}>50%감면</span>}
-                        </div>
-                      </div>
-                      <button onClick={() => setSelectedMember(null)} style={smallBtnStyle}>다른 회원 검색</button>
-                    </div>
-
-                    {/* 요약 */}
-                    <div style={{
-                      display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16,
-                    }}>
-                      <SummaryBox label={`${selectedMonth}월 결제 예정`} value={`${totalDue.toLocaleString()}원`} color="#185FA5" />
-                      <SummaryBox label="결제 완료" value={`${totalPaid.toLocaleString()}원`} color="#1D9E75" />
-                      <SummaryBox label="미납" value={`${remaining.toLocaleString()}원`} color={remaining > 0 ? "#A32D2D" : "#888"} />
-                    </div>
-
-                    {/* 일괄 결제 버튼 */}
-                    {remaining > 0 && (
-                      <div style={{ marginBottom: 16 }}>
-                        <button onClick={openBulkPayModal} style={{
-                          padding: '12px 24px',
-                          background: '#1D9E75', color: 'white',
-                          border: 'none', borderRadius: 8, cursor: 'pointer',
-                          fontSize: 14, fontWeight: 500,
-                        }}>💰 미납 강좌 일괄 결제 처리</button>
-                      </div>
-                    )}
-
-                    {/* 강좌별 결제 상태 */}
-                    {monthlyEnrollments.length === 0 ? (
-                      <p style={{ color: '#888', fontSize: 13 }}>{selectedMonth}월에 운영되는 신청 강좌가 없습니다.</p>
-                    ) : (
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                        <thead>
-                          <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
-                            <th style={thStyle}>강좌</th>
-                            <th style={thStyle}>구분</th>
-                            <th style={thStyle}>{selectedMonth}월 결제</th>
-                            <th style={thStyle}>금액</th>
-                            <th style={thStyle}>방법</th>
-                            <th style={thStyle}>결제일</th>
-                            <th style={thStyle}>관리</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {monthlyEnrollments.map(e => {
-                            const course = courses.find(c => c.id === e.course_id);
-                            if (!course) return null;
-                            const p = getPayment(e.id, selectedMonth);
-
-                            if (isRefundedBeforeMonth(e, selectedYear, selectedMonth)) {
-                              return (
-                                <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0', opacity: 0.5 }}>
-                                  <td style={tdStyle}>
-                                    <Link href={`/courses/${course.id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{course.name}</Link>
-                                  </td>
-                                  <td colSpan={6} style={{ ...tdStyle, color: '#A32D2D', fontSize: 12 }}>({e.refund_date} 환불 처리)</td>
-                                </tr>
-                              );
-                            }
-
-                            const calc = calculateFee(course.fee_jung_gu, course.fee_other, selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100, course.is_free);
-                            const isAutoComplete = calc.amount === 0;
-
-                            return (
-                              <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                                <td style={tdStyle}>
-                                  <Link href={`/courses/${course.id}`} style={{ color: '#185FA5', textDecoration: 'none' }}><strong>{course.name}</strong></Link>
-                                  {e.status === 'paused' && (
-                                    <span style={{ marginLeft: 4, fontSize: 10, padding: '1px 5px', background: '#7B3FBF', color: 'white', borderRadius: 3 }}>일시중지</span>
-                                  )}
-                                </td>
-                                <td style={tdStyle}>
-                                  <span style={badgeStyle(CATEGORY_COLORS[course.category] || '#666')}>{course.category}</span>
-                                </td>
-                                <td style={tdStyle}>
-                                  {p?.is_paid ? (<span style={badgeStyle('#1D9E75')}>✓ 완료</span>
-                                  ) : isAutoComplete ? (<span style={badgeStyle('#1D9E75')}>자동완료</span>
-                                  ) : (<span style={badgeStyle('#A32D2D')}>미납</span>)}
-                                </td>
-                                <td style={tdStyle}>{p ? p.amount.toLocaleString() : calc.amount.toLocaleString()}원</td>
-                                <td style={tdStyle}>{p?.payment_method ? PAYMENT_METHOD_LABELS[p.payment_method] : '-'}</td>
-                                <td style={tdStyle}>{p?.paid_at || '-'}</td>
-                                <td style={tdStyle}>
-                                  <button onClick={() => openPaymentModal(e, course)} style={smallBtnStyle}>
-                                    {p?.is_paid ? '수정' : '결제처리'}
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {!selectedMember && memberSearchResults.length === 0 && !memberSearching && (
-                <div style={{ background: 'white', borderRadius: 12, padding: 40, textAlign: 'center', color: '#888', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-                  <p style={{ margin: 0 }}>회원을 검색해서 결제 처리하세요.</p>
-                  <p style={{ fontSize: 12, marginTop: 8 }}>한 회원이 여러 강좌를 신청한 경우 한 번에 결제할 수 있습니다.</p>
-                </div>
-              )}
-            </>
-          )}
-
-          {/* ============================================ */}
           {/* 탭 3: 미납자 점검                              */}
           {/* ============================================ */}
           {activeTab === 'unpaid' && (
             <div style={{ background: 'white', borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
               <div style={{ marginBottom: 16 }}>
-                <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>
-                  ⚠️ {selectedYear}년 {selectedMonth}월 미납자 ({allUnpaid.length}명)
-                </h3>
+                <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>⚠️ 전체 미납자 ({allUnpaid.length}건)</h3>
                 <p style={{ fontSize: 12, color: '#888', margin: 0 }}>
-                  매월 15~24일 점검 시 활용하세요. 대기자 유무를 확인하고 종료 처리 여부를 결정할 수 있습니다.
+                  매월 15~24일 점검 시 활용하세요. 미납자 종료 처리 후 대기자에게 연락할 수 있습니다.
                 </p>
               </div>
 
               {allUnpaid.length === 0 ? (
-                <p style={{ color: '#888', fontSize: 13, padding: 20, textAlign: 'center' }}>
-                  미납자가 없습니다. 👍
-                </p>
+                <p style={{ color: '#888', fontSize: 13, padding: 20, textAlign: 'center' }}>미납자가 없습니다. 👍</p>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
@@ -799,17 +1127,15 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                       <th style={thStyle}>회원</th>
                       <th style={thStyle}>연락처</th>
                       <th style={thStyle}>강좌</th>
-                      <th style={thStyle}>구분</th>
-                      <th style={thStyle}>미납 금액</th>
+                      <th style={thStyle}>미납 월</th>
                       <th style={thStyle}>대기자</th>
                       <th style={thStyle}>관리</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {allUnpaid.map(({ course, enrollment, waitingCount }) => {
+                    {allUnpaid.map(({ course, enrollment, waitingCount, unpaidMonths }) => {
                       const member = enrollment.members;
                       if (!member) return null;
-                      const calc = calculateFee(course.fee_jung_gu, course.fee_other, member.is_jung_gu, member.is_discount_50, member.is_discount_100, course.is_free);
 
                       return (
                         <tr key={enrollment.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
@@ -817,29 +1143,33 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                             <Link href={`/members/${enrollment.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
                               <strong>{member.name}</strong>
                             </Link>
-                            {member.is_discount_100 && <span style={{ ...badgeStyle('#A32D2D'), marginLeft: 4 }}>100%</span>}
-                            {member.is_discount_50 && <span style={{ ...badgeStyle('#BA7517'), marginLeft: 4 }}>50%</span>}
                           </td>
                           <td style={tdStyle}>{member.phone || '-'}</td>
                           <td style={tdStyle}>
                             <Link href={`/courses/${course.id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{course.name}</Link>
                           </td>
                           <td style={tdStyle}>
-                            <span style={badgeStyle(CATEGORY_COLORS[course.category] || '#666')}>{course.category}</span>
+                            <strong style={{ color: '#A32D2D' }}>
+                              {unpaidMonths.map(m => `${m}월`).join(', ')}
+                            </strong>
                           </td>
-                          <td style={tdStyle}><strong style={{ color: '#A32D2D' }}>{calc.amount.toLocaleString()}원</strong></td>
                           <td style={tdStyle}>
                             {waitingCount > 0 ? (
                               <span style={{ ...badgeStyle('#BA7517') }}>대기 {waitingCount}명</span>
-                            ) : (
-                              <span style={{ color: '#888', fontSize: 12 }}>없음</span>
-                            )}
+                            ) : (<span style={{ color: '#888', fontSize: 12 }}>없음</span>)}
                           </td>
                           <td style={tdStyle}>
-                            <button onClick={() => openPaymentModal(enrollment, course)} style={smallBtnStyle}>결제처리</button>
-                            <Link href={`/courses/${course.id}`} style={{ ...smallBtnStyle, display: 'inline-block', textDecoration: 'none', color: '#666' }}>
-                              종료 처리
-                            </Link>
+                            <button onClick={() => {
+                              const result = memberSearchResults.length > 0 ? memberSearchResults[0] : null;
+                              const fakeResult: MemberSearchResult = {
+                                id: member.id, name: member.name, phone: member.phone,
+                                region_type: member.region_type, is_jung_gu: member.is_jung_gu,
+                                is_discount_50: member.is_discount_50, is_discount_100: member.is_discount_100,
+                              };
+                              selectMember(fakeResult);
+                              setActiveTab('by-member');
+                            }} style={smallBtnStyle}>회원별 보기</button>
+                            <button onClick={() => openEndScheduleModal(enrollment)} style={smallBtnStyle}>종료 예약</button>
                           </td>
                         </tr>
                       );
@@ -855,9 +1185,9 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
               }}>
                 <strong>💡 안내</strong>
                 <ul style={{ margin: '6px 0 0', paddingLeft: 20, lineHeight: 1.6 }}>
-                  <li><strong>결제처리</strong>: 회원이 결제했으면 처리</li>
-                  <li><strong>종료 처리</strong>: 강좌 상세 페이지로 이동해서 수강 종료 (미등록 종료)</li>
-                  <li><strong>대기자가 있는 경우</strong>: 미납자 종료 후 대기자에게 연락하여 자리 채우기 결정</li>
+                  <li><strong>회원별 보기</strong>: 해당 회원의 연간 수납 현황을 보면서 결제 처리</li>
+                  <li><strong>종료 예약</strong>: 특정 월부터 수강 종료로 처리 (그 월부터 미납자에서 제외)</li>
+                  <li><strong>대기자가 있는 경우</strong>: 미납자 종료 후 대기자에게 연락하여 자리 채우기</li>
                 </ul>
               </div>
             </div>
@@ -865,13 +1195,15 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         </>
       )}
 
-      {/* 개별 결제 모달 */}
+      {/* ============================================ */}
+      {/* 개별 결제 모달 (강좌별 보기에서)               */}
+      {/* ============================================ */}
       {paymentModalOpen && editingPayment && (
         <div style={modalOverlayStyle}>
           <div style={modalContentStyle}>
             <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>결제 처리</h2>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
-              <strong>{editingPayment.enrollment.members?.name}</strong> · {editingPayment.course.name} · {selectedYear}년 {selectedMonth}월
+              <strong>{editingPayment.enrollment.members?.name}</strong> · {editingPayment.course.name} · {selectedYear}년 {editingPayment.month}월
             </p>
 
             {(() => {
@@ -889,7 +1221,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
             })()}
 
             <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle}>결제 금액 (원)</label>
+              <label style={labelStyle}>결제 금액 (원) - 수기 수정 가능</label>
               <input value={payAmount} onChange={(e) => setPayAmount(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
             </div>
 
@@ -914,14 +1246,14 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                 <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} style={inputStyle} />
               </div>
               <div>
-                <label style={labelStyle}>영수증 번호 (선택)</label>
+                <label style={labelStyle}>영수증 번호</label>
                 <input value={receiptNum} onChange={(e) => setReceiptNum(e.target.value)} style={inputStyle} />
               </div>
             </div>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>메모 (선택)</label>
-              <input value={payMemo} onChange={(e) => setPayMemo(e.target.value)} style={inputStyle} />
+              <label style={labelStyle}>메모</label>
+              <input value={payMemo} onChange={(e) => setPayMemo(e.target.value)} style={inputStyle} placeholder="이월, 무료수강권 등" />
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
@@ -941,111 +1273,161 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         </div>
       )}
 
-      {/* 일괄 결제 모달 */}
-      {bulkPayModalOpen && selectedMember && (() => {
-        const memberEnrollments = getEnrollmentsByMember(selectedMember.id);
-        const candidateEnrollments = memberEnrollments.filter(e => {
-          const c = courses.find(cc => cc.id === e.course_id);
-          if (!c) return false;
-          if (!parseOperationMonths(c.operation_months).includes(selectedMonth)) return false;
-          if (isRefundedBeforeMonth(e, selectedYear, selectedMonth)) return false;
-          const p = getPayment(e.id, selectedMonth);
-          if (p?.is_paid) return false;
-          const calc = calculateFee(c.fee_jung_gu, c.fee_other, selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100, c.is_free);
-          if (calc.amount === 0) return false;
-          return true;
-        });
+      {/* ============================================ */}
+      {/* 일괄 결제 모달 (회원별 보기에서)               */}
+      {/* ============================================ */}
+      {bulkPayModalOpen && selectedMember && (
+        <div style={modalOverlayStyle}>
+          <div style={{ ...modalContentStyle, maxWidth: 700 }}>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>일괄 결제 처리</h2>
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+              <strong>{selectedMember.name}</strong>님 · 선택한 {selectionItems.length}건
+            </p>
 
-        const totalAmount = candidateEnrollments
-          .filter(e => bulkEnrollments.has(e.id))
-          .reduce((sum, e) => {
-            const c = courses.find(cc => cc.id === e.course_id);
-            if (!c) return sum;
-            const calc = calculateFee(c.fee_jung_gu, c.fee_other, selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100, c.is_free);
-            return sum + calc.amount;
-          }, 0);
-
-        return (
-          <div style={modalOverlayStyle}>
-            <div style={{ ...modalContentStyle, maxWidth: 600 }}>
-              <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>일괄 결제 처리</h2>
-              <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
-                <strong>{selectedMember.name}</strong>님 · {selectedYear}년 {selectedMonth}월 미납 강좌
-              </p>
-
-              <div style={{ marginBottom: 16 }}>
-                <label style={labelStyle}>결제할 강좌 선택 ({bulkEnrollments.size}개 선택됨)</label>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 250, overflowY: 'auto' }}>
-                  {candidateEnrollments.map(e => {
-                    const course = courses.find(c => c.id === e.course_id);
-                    if (!course) return null;
-                    const calc = calculateFee(course.fee_jung_gu, course.fee_other, selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100, course.is_free);
-                    const checked = bulkEnrollments.has(e.id);
-                    return (
-                      <label key={e.id} style={{
-                        display: 'flex', alignItems: 'center', gap: 10,
-                        padding: 10, background: checked ? '#E6F1FB' : 'white',
-                        border: '1px solid ' + (checked ? '#185FA5' : '#eee'),
-                        borderRadius: 6, cursor: 'pointer',
-                      }}>
-                        <input type="checkbox" checked={checked} onChange={() => toggleBulkEnrollment(e.id)} />
-                        <div style={{ flex: 1 }}>
-                          <strong style={{ fontSize: 14 }}>{course.name}</strong>
-                          <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>{course.category}</span>
-                        </div>
-                        <strong style={{ fontSize: 14, color: '#185FA5' }}>{calc.amount.toLocaleString()}원</strong>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div style={{
-                padding: 12, background: '#FFF8E1', border: '1px solid #FFE082',
-                borderRadius: 6, marginBottom: 16, fontSize: 14,
-              }}>
-                <strong>총 결제 금액: <span style={{ color: '#185FA5', fontSize: 18 }}>{totalAmount.toLocaleString()}원</span></strong>
-              </div>
-
-              <div style={{ marginBottom: 12 }}>
-                <label style={labelStyle}>결제 방법</label>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {(['cash', 'card', 'transfer', 'zeropay'] as PaymentMethod[]).map(m => (
-                    <button key={m} onClick={() => setBulkPayMethod(m)} style={{
-                      flex: 1, padding: '10px',
-                      background: bulkPayMethod === m ? '#185FA5' : 'white',
-                      color: bulkPayMethod === m ? 'white' : '#666',
-                      border: '1px solid ' + (bulkPayMethod === m ? '#185FA5' : '#ddd'),
-                      borderRadius: 6, cursor: 'pointer', fontSize: 13,
-                    }}>{PAYMENT_METHOD_LABELS[m]}</button>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-                <div>
-                  <label style={labelStyle}>결제일</label>
-                  <input type="date" value={bulkPayDate} onChange={(e) => setBulkPayDate(e.target.value)} style={inputStyle} />
-                </div>
-                <div>
-                  <label style={labelStyle}>영수증 번호 (선택)</label>
-                  <input value={bulkReceiptNum} onChange={(e) => setBulkReceiptNum(e.target.value)} style={inputStyle} />
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={handleBulkSave} style={{
-                  flex: 1, padding: '12px',
-                  background: '#1D9E75', color: 'white',
-                  border: 'none', borderRadius: 6, cursor: 'pointer',
-                  fontSize: 14, fontWeight: 500,
-                }}>✓ {bulkEnrollments.size}개 강좌 결제 완료</button>
-                <button onClick={() => setBulkPayModalOpen(false)} style={secondaryBtnStyle}>취소</button>
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>결제 항목 (금액 수기 수정 가능)</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto', border: '1px solid #eee', borderRadius: 6, padding: 8 }}>
+                {selectionItems.map((item, idx) => {
+                  const key = item.isAnnual ? `annual-${item.courseId}` : `${item.courseId}-${item.month}`;
+                  const currentAmount = cellAmounts[key] ?? item.amount;
+                  return (
+                    <div key={`${key}-${idx}`} style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: 8, background: '#fafafa', borderRadius: 4,
+                    }}>
+                      <div style={{ flex: 1 }}>
+                        <strong style={{ fontSize: 13 }}>{item.courseName}</strong>
+                        <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>
+                          {item.isAnnual ? '연납 (2~12월)' : `${item.month}월`}
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        value={currentAmount.toLocaleString()}
+                        onChange={(e) => {
+                          const num = parseInt(e.target.value.replace(/[^0-9]/g, ''), 10) || 0;
+                          setCellAmounts(prev => ({ ...prev, [key]: num }));
+                        }}
+                        style={{ ...inputStyle, width: 100, textAlign: 'right' }}
+                      />
+                      <span style={{ fontSize: 12, color: '#888' }}>원</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
+
+            <div style={{
+              padding: 12, background: '#FFF8E1', border: '1px solid #FFE082',
+              borderRadius: 6, marginBottom: 16, fontSize: 14, textAlign: 'right',
+            }}>
+              <strong>총 결제 금액: <span style={{ color: '#185FA5', fontSize: 20 }}>
+                {Object.values(cellAmounts).reduce((s, v) => s + (v || 0), 0).toLocaleString()}원
+              </span></strong>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelStyle}>결제 방법</label>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {(['cash', 'card', 'transfer', 'zeropay'] as PaymentMethod[]).map(m => (
+                  <button key={m} onClick={() => setBulkPayMethod(m)} style={{
+                    flex: 1, padding: '10px',
+                    background: bulkPayMethod === m ? '#185FA5' : 'white',
+                    color: bulkPayMethod === m ? 'white' : '#666',
+                    border: '1px solid ' + (bulkPayMethod === m ? '#185FA5' : '#ddd'),
+                    borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                  }}>{PAYMENT_METHOD_LABELS[m]}</button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+              <div>
+                <label style={labelStyle}>결제일</label>
+                <input type="date" value={bulkPayDate} onChange={(e) => setBulkPayDate(e.target.value)} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>영수증 번호</label>
+                <input value={bulkReceiptNum} onChange={(e) => setBulkReceiptNum(e.target.value)} style={inputStyle} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleBulkSave} style={{
+                flex: 1, padding: '12px',
+                background: '#1D9E75', color: 'white',
+                border: 'none', borderRadius: 6, cursor: 'pointer',
+                fontSize: 14, fontWeight: 500,
+              }}>✓ 결제 처리</button>
+              <button onClick={() => setBulkPayModalOpen(false)} style={secondaryBtnStyle}>취소</button>
+            </div>
           </div>
-        );
-      })()}
+        </div>
+      )}
+
+      {/* ============================================ */}
+      {/* 종료 예약 모달                                  */}
+      {/* ============================================ */}
+      {endScheduleModalOpen && endingEnrollment && (
+        <div style={modalOverlayStyle}>
+          <div style={modalContentStyle}>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>수강 종료 예약</h2>
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+              <strong>{endingEnrollment.members?.name}</strong> · {courses.find(c => c.id === endingEnrollment.course_id)?.name}
+            </p>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>{selectedYear}년 몇 월부터 수강을 종료할까요?</label>
+              <select value={endFromMonth} onChange={(e) => setEndFromMonth(parseInt(e.target.value))} style={inputStyle}>
+                {months.map(m => (
+                  <option key={m} value={m}>{m}월부터</option>
+                ))}
+              </select>
+              <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
+                선택한 월부터는 수납 화면에서 자동으로 제외되며, 출석부에서도 출석체크가 불가능해집니다.
+              </p>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>종료 사유</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {(['unregistered', 'refund', 'other'] as EndReason[]).map(r => (
+                  <label key={r} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: 10, border: '1px solid ' + (endReason === r ? '#185FA5' : '#ddd'),
+                    background: endReason === r ? '#E6F1FB' : 'white',
+                    borderRadius: 6, cursor: 'pointer',
+                  }}>
+                    <input type="radio" checked={endReason === r} onChange={() => setEndReason(r)} />
+                    <div>
+                      <strong style={{ fontSize: 13 }}>
+                        {r === 'unregistered' ? '미등록 (자연 종료)' : r === 'refund' ? '환불' : '기타'}
+                      </strong>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {endReason === 'refund' && (
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>환불 메모 (선택)</label>
+                <input value={endMemo} onChange={(e) => setEndMemo(e.target.value)} style={inputStyle} placeholder="예: 입원으로 환불 신청" />
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleEndSchedule} style={{
+                flex: 1, padding: '12px',
+                background: '#185FA5', color: 'white',
+                border: 'none', borderRadius: 6, cursor: 'pointer',
+                fontSize: 14, fontWeight: 500,
+              }}>확인</button>
+              <button onClick={() => { setEndScheduleModalOpen(false); setEndingEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1063,17 +1445,6 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
       fontSize: 14,
       fontWeight: active ? 500 : 'normal',
     }}>{label}</button>
-  );
-}
-
-function SummaryBox({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div style={{
-      background: '#fafafa', borderRadius: 8, padding: '12px 14px',
-    }}>
-      <p style={{ fontSize: 11, color: '#888', margin: 0 }}>{label}</p>
-      <p style={{ fontSize: 18, fontWeight: 500, margin: '4px 0 0', color }}>{value}</p>
-    </div>
   );
 }
 

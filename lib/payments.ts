@@ -27,13 +27,6 @@ export const END_REASON_COLORS: Record<EndReason, string> = {
 
 /**
  * 회원의 거주구분 + 감면 정보로 실제 수강료 계산
- *
- * @param feeJungGu 중구민가
- * @param feeOther 타구민가
- * @param isJungGu 중구민 여부
- * @param isDiscount50 50% 감면 대상
- * @param isDiscount100 100% 감면 대상
- * @param isFree 무료 강좌
  */
 export function calculateFee(
   feeJungGu: number,
@@ -43,16 +36,13 @@ export function calculateFee(
   isDiscount100: boolean,
   isFree: boolean
 ): { amount: number; discountType: DiscountType; description: string } {
-  // 무료 강좌
   if (isFree) {
     return { amount: 0, discountType: null, description: '무료 강좌' };
   }
 
-  // 기본가 결정 (거주구분에 따라)
   const baseFee = isJungGu ? feeJungGu : feeOther;
   const baseLabel = isJungGu ? '중구민가' : '타구민가';
 
-  // 100% 감면
   if (isDiscount100) {
     return {
       amount: 0,
@@ -61,7 +51,6 @@ export function calculateFee(
     };
   }
 
-  // 50% 감면
   if (isDiscount50) {
     const amount = Math.round(baseFee / 2);
     return {
@@ -71,7 +60,6 @@ export function calculateFee(
     };
   }
 
-  // 감면 없음
   return {
     amount: baseFee,
     discountType: null,
@@ -80,10 +68,23 @@ export function calculateFee(
 }
 
 /**
- * 연납 금액 계산 (11개월 결제 → 12월 무료)
+ * 연납 가능 여부 확인 (1~12월 전체 운영하는 강좌만)
+ */
+export function isAnnualAvailable(operationMonths: string | null): boolean {
+  if (!operationMonths) return false;
+  const months = operationMonths.split(',').filter(Boolean).map(Number);
+  // 1월부터 12월까지 모두 있어야 연납 가능
+  for (let m = 1; m <= 12; m++) {
+    if (!months.includes(m)) return false;
+  }
+  return true;
+}
+
+/**
+ * 연납 금액 계산 (10개월분, 1월 OT 제외)
  */
 export function calculateAnnualFee(monthlyFee: number): number {
-  return monthlyFee * 11;
+  return monthlyFee * 10;
 }
 
 /**
@@ -98,7 +99,7 @@ export function getCurrentYearMonth(): { year: number; month: number } {
 }
 
 /**
- * 운영월 문자열 파싱 (예: "3,4,5,6,7,8,9,10,11,12" → [3,4,5,...])
+ * 운영월 문자열 파싱
  */
 export function parseOperationMonths(operationMonths: string | null): number[] {
   if (!operationMonths) return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
@@ -106,9 +107,66 @@ export function parseOperationMonths(operationMonths: string | null): number[] {
 }
 
 /**
- * 결제 일자가 환불일 이후인지 확인 (출석부 차단용)
+ * 결제 일자가 환불일 이후인지 확인
  */
 export function isAfterRefund(date: string, refundDate: string | null): boolean {
   if (!refundDate) return false;
   return date > refundDate;
+}
+
+/**
+ * 특정 회원-강좌 조합이 특정 월에 종료 처리된 상태인지 확인
+ *
+ * 종료 조건:
+ *   1. status='ended' (즉시 종료) → 모든 월 종료
+ *   2. end_from_year/month 있고 그 월 이상 → 종료
+ *   3. refund_date 있고 그 월 1일 이후 → 종료 (환불)
+ */
+export function isEndedAtMonth(
+  enrollment: {
+    status: string;
+    end_from_year: number | null;
+    end_from_month: number | null;
+    refund_date: string | null;
+  },
+  year: number,
+  month: number
+): boolean {
+  // 즉시 종료
+  if (enrollment.status === 'ended') return true;
+
+  // 종료 예약
+  if (enrollment.end_from_year && enrollment.end_from_month) {
+    if (year > enrollment.end_from_year) return true;
+    if (year === enrollment.end_from_year && month >= enrollment.end_from_month) return true;
+  }
+
+  // 환불
+  if (enrollment.refund_date) {
+    const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+    if (enrollment.refund_date < monthStart) return true;
+  }
+
+  return false;
+}
+
+/**
+ * 셀 상태 결정 (등록/미등록/미납/수강종료/운영X)
+ */
+export type CellStatus = 'paid' | 'unregistered' | 'unpaid' | 'ended' | 'not_operating';
+
+export function getCellStatus(
+  isPaid: boolean,
+  isOperating: boolean,
+  isEnded: boolean,
+  isPastOrCurrent: boolean,
+  feeAmount: number
+): CellStatus {
+  if (!isOperating) return 'not_operating';
+  if (isEnded) return 'ended';
+  if (isPaid) return 'paid';
+  // 자동완료 (0원) - 결제 기록 없어도 "등록"으로 보임
+  if (feeAmount === 0 && isPastOrCurrent) return 'paid';
+  if (isPastOrCurrent) return 'unpaid';
+  return 'unregistered';
 }
