@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getCurrentStaff } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
 import TopBar from '@/components/TopBar';
 import StaffClient from './StaffClient';
 
@@ -9,16 +10,23 @@ export default async function StaffPage() {
   if (!staff) {
     redirect('/login?error=no_access');
   }
-
-  // 관리자만 접근 가능
   if (staff.role !== 'admin') {
-    redirect('/?error=no_permission');
+    redirect('/?error=admin_only');
   }
+
+  const supabase = await createClient();
+  const [staffRes, coursesRes] = await Promise.all([
+    supabase.from('staff_members').select('*').order('role').order('name'),
+    supabase.from('courses').select('id, name, category').eq('is_active', true).order('category').order('name'),
+  ]);
 
   return (
     <div>
       <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
-      <StaffClient currentEmail={staff.email} />
+      <StaffClient
+        initialStaff={staffRes.data || []}
+        courses={coursesRes.data || []}
+      />
     </div>
   );
 }

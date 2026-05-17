@@ -10,6 +10,11 @@ export default async function Home() {
     redirect('/login?error=no_access');
   }
 
+  // 태블릿 권한이면 출석부로 자동 이동
+  if (staff.role === 'tablet') {
+    redirect('/attendance');
+  }
+
   return (
     <div>
       <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
@@ -29,6 +34,7 @@ export default async function Home() {
           <MenuCard href="/courses" title="강좌 관리" description="강좌 등록 및 관리" icon="📚" />
           <MenuCard href="/instructors" title="강사 관리" description="강사 정보 및 강사비" icon="👨‍🏫" />
           <MenuCard href="/payments" title="수납 관리" description="월별 수강료 결제" icon="💰" />
+          <MenuCard href="/attendance" title="출석부" description="출석 체크 및 출석부 출력" icon="✅" />
           {staff.role === 'admin' && (
             <MenuCard href="/staff" title="직원 명단 관리" description="시스템 접근 직원 관리" icon="🔐" adminOnly />
           )}
@@ -40,7 +46,7 @@ export default async function Home() {
           borderRadius: 8, fontSize: 13, color: '#5D4037',
         }}>
           <strong>💡 안내</strong><br />
-          이 시스템은 등록된 직원만 사용할 수 있습니다. 다른 분께 알려주시려면 직원 명단에 등록해주세요.
+          이 시스템은 등록된 직원만 사용할 수 있습니다.
         </div>
       </div>
     </div>
