@@ -52,6 +52,10 @@ type Enrollment = {
   waiting_order: number | null;
   enrolled_at: string;
   ended_at: string | null;
+  end_date: string | null;
+  end_reason: string | null;
+  refund_date: string | null;
+  refund_memo: string | null;
   memo: string | null;
   courses: CourseInEnrollment | null;
 };
@@ -371,9 +375,15 @@ export default function MemberDetailClient({
     else reloadEnrollments();
   }
 
+  // 종료 판정: status가 ended이거나, 수납 화면에서 end_date(처리일)가 찍힌 경우
+  const isEnrollmentEnded = (e: Enrollment) =>
+    e.status === 'ended' || !!e.end_date || !!e.refund_date;
+
   // 상태별 정렬
-  const activeEnrollments = enrollments.filter(e => e.status === 'active' || e.status === 'paused' || e.status === 'waiting');
-  const endedEnrollments = enrollments.filter(e => e.status === 'ended');
+  const activeEnrollments = enrollments.filter(e =>
+    !isEnrollmentEnded(e) && (e.status === 'active' || e.status === 'paused' || e.status === 'waiting')
+  );
+  const endedEnrollments = enrollments.filter(e => isEnrollmentEnded(e));
 
   return (
     <div style={{ maxWidth: 900, margin: '40px auto', padding: 20 }}>
@@ -636,7 +646,29 @@ export default function MemberDetailClient({
                     <td style={tdStyle}>
                       {e.courses && <span style={badgeStyle(COURSE_CATEGORY_COLORS[e.courses.category] || '#666')}>{e.courses.category}</span>}
                     </td>
-                    <td style={tdStyle}>{e.ended_at?.substring(0, 10)}</td>
+                    <td style={tdStyle}>
+                      {(() => {
+                        const reasonLabel = e.end_reason === 'refund' ? '환불'
+                          : e.end_reason === 'unregistered' ? '미등록(종료)'
+                          : e.end_reason === 'other' ? '이월/기타' : null;
+                        const dateStr = e.end_date || e.refund_date || (e.ended_at ? e.ended_at.substring(0, 10) : null);
+                        return (
+                          <span style={{ fontSize: 12 }}>
+                            {dateStr || '-'}
+                            {reasonLabel && (
+                              <span style={{
+                                marginLeft: 6, padding: '1px 6px', borderRadius: 4, fontSize: 11,
+                                background: e.end_reason === 'refund' ? '#FCEBEB' : '#f0f0f0',
+                                color: e.end_reason === 'refund' ? '#A32D2D' : '#666',
+                              }}>{reasonLabel}</span>
+                            )}
+                            {e.refund_memo && (
+                              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{e.refund_memo}</div>
+                            )}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                       <button onClick={() => handleChangeEnrollmentStatus(e, 'active')} style={smallBtnStyle}>재신청</button>
                       <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>

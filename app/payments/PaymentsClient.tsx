@@ -143,6 +143,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const [endReason, setEndReason] = useState<EndReason>('unregistered');
   const [endMemo, setEndMemo] = useState('');
 
+  // 재등록 모달
+  const [reEnrollModalOpen, setReEnrollModalOpen] = useState(false);
+  const [reEnrollEnrollment, setReEnrollEnrollment] = useState<Enrollment | null>(null);
+  const [reEnrollDate, setReEnrollDate] = useState(new Date().toISOString().split('T')[0]);
+
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -578,6 +583,47 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     else loadData();
   }
 
+  // 재등록 모달 열기 (수강종료된 강좌를 다시 등록)
+  function openReEnrollModal(enrollment: Enrollment) {
+    setReEnrollEnrollment(enrollment);
+    setReEnrollDate(new Date().toISOString().split('T')[0]);
+    setReEnrollModalOpen(true);
+  }
+
+  // 재등록 처리: 종료 정보를 해제하고 다시 수강 시작
+  async function handleReEnroll() {
+    if (!reEnrollEnrollment) return;
+    if (!reEnrollDate) {
+      alert('재등록일을 입력하세요');
+      return;
+    }
+    const memberName = reEnrollEnrollment.members?.name || '회원';
+    const courseName = courses.find(c => c.id === reEnrollEnrollment.course_id)?.name || '강좌';
+
+    // 종료 관련 정보 모두 해제 + 다시 수강중으로
+    // (이전 출석/결제 기록은 그대로 유지됨)
+    const { error } = await supabase.from('enrollments').update({
+      status: 'active',
+      end_date: null,
+      end_from_year: null,
+      end_from_month: null,
+      end_reason: null,
+      refund_date: null,
+      refund_memo: null,
+      ended_at: null,
+      enrolled_at: new Date(reEnrollDate).toISOString(),
+    }).eq('id', reEnrollEnrollment.id);
+
+    if (error) {
+      alert('재등록 실패: ' + error.message);
+    } else {
+      alert(`${memberName}님 / ${courseName}\n${reEnrollDate}자로 재등록되었습니다.\n이전 출석 기록은 그대로 유지됩니다.`);
+      setReEnrollModalOpen(false);
+      setReEnrollEnrollment(null);
+      loadData();
+    }
+  }
+
   const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
   const today = new Date();
   const todayYear = today.getFullYear();
@@ -825,7 +871,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     label = '수강종료';
                                     bgColor = '#3F3F3F';
                                     textColor = 'white';
-                                    canSelect = false;
+                                    canSelect = true; // 클릭 시 재등록 모달
                                   } else if (isPaid) {
                                     label = isOTMonth ? '등록 (OT)' : '등록';
                                     bgColor = '#1D9E75';
@@ -855,8 +901,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                       key={month}
                                       onClick={() => {
                                         if (!canSelect || isAnnualHere) return;
-                                        // 이미 결제 완료된 셀: 결제 모달로 열어서 수정/삭제 가능
-                                        if (payment?.is_paid) {
+                                        if (isEnded) {
+                                          // 수강종료 셀: 재등록 모달
+                                          openReEnrollModal(enrollment);
+                                        } else if (payment?.is_paid) {
+                                          // 이미 결제 완료된 셀: 결제 모달 (수정/취소)
                                           openPaymentModal(enrollment, course, month);
                                         } else {
                                           // 미납/미등록 셀: 선택 토글 (다중 선택 가능)
@@ -1243,11 +1292,19 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                 editingPayment.course.is_free
               );
               return (
-                <div style={{ background: '#E6F1FB', border: '1px solid #B5D4F4', padding: 12, borderRadius: 6, fontSize: 12, color: '#042C53', marginBottom: 16 }}>
+                <div style={{ background: '#E6F1FB', border: '1px solid #B5D4F4', padding: 12, borderRadius: 6, fontSize: 12, color: '#042C53', marginBottom: 12 }}>
                   💡 자동 계산: {calc.description}
                 </div>
               );
             })()}
+
+            <div style={{
+              background: '#FFF8E1', border: '1px solid #FFE082',
+              padding: 10, borderRadius: 6, fontSize: 11, color: '#5D4037', marginBottom: 16,
+            }}>
+              📌 <strong>중간 등록 안내</strong>: 해당 월 15일 이전 등록은 전액, 16일 이후 등록은 반액으로 직접 입력하세요.
+              이월·무료수강권 등도 금액을 수기로 변경하면 됩니다.
+            </div>
 
             <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>결제 금액 (원) - 수기 수정 가능</label>
@@ -1462,6 +1519,45 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                 fontSize: 14, fontWeight: 500,
               }}>확인</button>
               <button onClick={() => { setEndScheduleModalOpen(false); setEndingEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ============================================ */}
+      {/* 재등록 모달                                      */}
+      {/* ============================================ */}
+      {reEnrollModalOpen && reEnrollEnrollment && (
+        <div style={modalOverlayStyle}>
+          <div style={modalContentStyle}>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>재등록 처리</h2>
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+              <strong>{reEnrollEnrollment.members?.name}</strong> · {courses.find(c => c.id === reEnrollEnrollment.course_id)?.name}
+            </p>
+
+            <div style={{
+              background: '#E6F1FB', border: '1px solid #B5D4F4',
+              padding: 12, borderRadius: 6, fontSize: 12, color: '#042C53', marginBottom: 16,
+            }}>
+              이 회원은 환불/종료 처리된 상태입니다. 재등록하면 다시 수강중 상태가 되며,
+              <strong> 이전 출석·결제 기록은 그대로 유지</strong>됩니다.
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>재등록일 (다시 다니기 시작하는 날)</label>
+              <input type="date" value={reEnrollDate} onChange={(e) => setReEnrollDate(e.target.value)} style={inputStyle} />
+              <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
+                이 날짜부터 다시 출석체크와 수납이 가능해집니다. 수강료는 해당 월 셀을 클릭하여 별도로 결제 처리하세요.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleReEnroll} style={{
+                flex: 1, padding: '12px',
+                background: '#1D9E75', color: 'white',
+                border: 'none', borderRadius: 6, cursor: 'pointer',
+                fontSize: 14, fontWeight: 500,
+              }}>재등록</button>
+              <button onClick={() => { setReEnrollModalOpen(false); setReEnrollEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
             </div>
           </div>
         </div>
