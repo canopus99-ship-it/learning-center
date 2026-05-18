@@ -125,6 +125,7 @@ export function isAfterRefund(date: string, refundDate: string | null): boolean 
 export function isEndedAtMonth(
   enrollment: {
     status: string;
+    end_date?: string | null;
     end_from_year: number | null;
     end_from_month: number | null;
     refund_date: string | null;
@@ -132,16 +133,27 @@ export function isEndedAtMonth(
   year: number,
   month: number
 ): boolean {
-  // 즉시 종료
+  // \uc989\uc2dc \uc885\ub8cc
   if (enrollment.status === 'ended') return true;
 
-  // 종료 예약
-  if (enrollment.end_from_year && enrollment.end_from_month) {
-    if (year > enrollment.end_from_year) return true;
-    if (year === enrollment.end_from_year && month >= enrollment.end_from_month) return true;
+  // \ub0a0\uc9dc \uae30\ubc18 \ucc98\ub9ac (end_date \uc6b0\uc120)
+  // end_date\uac00 \uc18d\ud55c \ub2ec\uc758 "\ub2e4\uc74c \ub2ec"\ubd80\ud130 \uc218\ub0a9 \ud654\uba74\uc5d0\uc11c \uc885\ub8cc \ud45c\uc2dc
+  // (end_date \ub2f9\uc6d4\uae4c\uc9c0\ub294 \uc774\ubbf8 \ub0b8 \uc218\uac15\ub8cc\uac00 \uc788\uc744 \uc218 \uc788\uc73c\ubbc0\ub85c \uc720\uc9c0)
+  if (enrollment.end_date) {
+    const endYear = parseInt(enrollment.end_date.substring(0, 4), 10);
+    const endMonth = parseInt(enrollment.end_date.substring(5, 7), 10);
+    if (year > endYear) return true;
+    if (year === endYear && month > endMonth) return true;
+    return false;
   }
 
-  // 환불
+  // (\uad6c \ubc84\uc804 \ud638\ud658) \uc6d4 \uae30\ubc18 \uc885\ub8cc \uc608\uc57d
+  if (enrollment.end_from_year && enrollment.end_from_month) {
+    if (year > enrollment.end_from_year) return true;
+    if (year === enrollment.end_from_year && month > enrollment.end_from_month) return true;
+  }
+
+  // (\uad6c \ubc84\uc804 \ud638\ud658) \ud658\ubd88\uc77c\uc774 \uadf8 \ub2ec\ubcf4\ub2e4 \uc774\uc804\uc774\uba74 \uc885\ub8cc
   if (enrollment.refund_date) {
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     if (enrollment.refund_date < monthStart) return true;

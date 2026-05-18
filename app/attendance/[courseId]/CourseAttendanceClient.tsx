@@ -43,6 +43,7 @@ type Enrollment = {
   enrolled_at: string;
   ended_at: string | null;
   end_reason: string | null;
+  end_date: string | null;
   end_from_year: number | null;
   end_from_month: number | null;
   refund_date: string | null;
@@ -369,24 +370,24 @@ export default function CourseAttendanceClient({
                     }}
                   >
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <strong style={{ fontSize: 15 }}>
+                      <strong style={{ fontSize: 22, fontWeight: 700 }}>
                         {idx + 1}. {member.name}
                       </strong>
-                      <div style={{ fontSize: 11, marginTop: 2, opacity: 0.8 }}>
-                        {member.phone || '-'}
+                      <div style={{ fontSize: 13, marginTop: 4, opacity: 0.8 }}>
+                        {member.phone ? ('\uc804\ud654 \ub05d 4\uc790\ub9ac: ' + member.phone.replace(/[^0-9]/g, '').slice(-4)) : '-'}
                       </div>
                       {!check.canCheck && (
-                        <div style={{ fontSize: 10, marginTop: 2, color: '#A32D2D' }}>
-                          ⛔ {check.reason}
+                        <div style={{ fontSize: 11, marginTop: 2, color: '#A32D2D' }}>
+                          \u26d4 {check.reason}
                         </div>
                       )}
                     </div>
                     <div style={{
-                      fontSize: 24,
-                      width: 32, height: 32,
+                      fontSize: 34,
+                      width: 44, height: 44,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}>
-                      {!check.canCheck ? '⛔' : (isPresent ? '✓' : '○')}
+                      {!check.canCheck ? '\u26d4' : (isPresent ? '\u2713' : '\u25cb')}
                     </div>
                   </div>
                 );
@@ -473,7 +474,7 @@ function PrintableAttendance({
 
   // 양식: 10일치씩, 20명씩 한 페이지
   const datesPerPage = 10;
-  const studentsPerPage = 20;
+  const studentsPerPage = 15;
 
   // 페이지 분할
   const datePages = chunk(dates, datesPerPage);
@@ -546,9 +547,9 @@ function PrintPage({
     dateColumns.push(null as any);
   }
 
-  // 20명으로 맞추기 (빈 행 채우기)
+  // 15\uba85\uc73c\ub85c \ub9de\ucd94\uae30 (\ube48 \ud589 \ucc44\uc6b0\uae30)
   const studentRows = [...enrollments];
-  while (studentRows.length < 20) {
+  while (studentRows.length < 15) {
     studentRows.push(null as any);
   }
 
@@ -564,13 +565,13 @@ function PrintPage({
   return (
     <div className="print-page" style={{
       pageBreakAfter: 'always',
-      padding: '20px 30px',
+      padding: '8px 24px',
       fontFamily: 'sans-serif',
       color: '#000',
       background: 'white',
     }}>
-      {/* 상단 헤더 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 30 }}>
+      {/* \uc0c1\ub2e8 \ud5e4\ub354 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div style={{ flex: 1 }}></div>
         <div style={{ flex: 2, textAlign: 'center' }}>
           <h1 style={{ fontSize: 18, margin: 0, fontWeight: 'bold' }}>
@@ -663,7 +664,11 @@ function PrintPage({
         @media print {
           @page {
             size: A4 portrait;
-            margin: 10mm;
+            margin: 8mm 10mm;
+          }
+          html, body {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
           .no-print { display: none !important; }
           .print-only { display: block !important; }
