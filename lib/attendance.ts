@@ -22,43 +22,43 @@ export function canCheckAttendance(
     refund_date: string | null;
   },
   classDate: string,        // 'YYYY-MM-DD'
-  isCancelled: boolean       // \ud734\uac15 \uc5ec\ubd80
+  isCancelled: boolean       // 휴강 여부
 ): { canCheck: boolean; reason: string | null } {
-  // 1. \ud734\uac15
+  // 1. 휴강
   if (isCancelled) {
-    return { canCheck: false, reason: '\ud734\uac15\ub41c \uc218\uc5c5\uc785\ub2c8\ub2e4' };
+    return { canCheck: false, reason: '휴강된 수업입니다' };
   }
 
-  // 2. \uc989\uc2dc \uc218\uac15\uc885\ub8cc
+  // 2. 즉시 수강종료
   if (enrollment.status === 'ended') {
-    return { canCheck: false, reason: '\uc218\uac15 \uc885\ub8cc\ub41c \ud68c\uc6d0\uc785\ub2c8\ub2e4' };
+    return { canCheck: false, reason: '수강 종료된 회원입니다' };
   }
 
-  // 3. \ucc98\ub9ac\uc77c(end_date) \uc774\ud6c4 \ucc28\ub2e8 - \ub0a0\uc9dc \ub2e8\uc704\ub85c \uc815\ud655\ud788
-  //    \ucc98\ub9ac\uc77c \ub2f9\uc77c\uae4c\uc9c0\ub294 \ucd9c\uc11d \uac00\ub2a5, \ub2e4\uc74c\ub0a0\ubd80\ud130 \ucc28\ub2e8
+  // 3. 처리일(end_date) 이후 차단 - 날짜 단위로 정확히
+  //    처리일 당일까지는 출석 가능, 다음날부터 차단
   if (enrollment.end_date) {
     if (classDate > enrollment.end_date) {
-      return { canCheck: false, reason: `\ucc98\ub9ac\uc77c(${enrollment.end_date}) \uc774\ud6c4 \uc218\uc5c5\uc785\ub2c8\ub2e4` };
+      return { canCheck: false, reason: `처리일(${enrollment.end_date}) 이후 수업입니다` };
     }
     return { canCheck: true, reason: null };
   }
 
-  // (\uad6c \ubc84\uc804 \ud638\ud658) \ud658\ubd88\uc77c \uc774\ud6c4 \ucc28\ub2e8
+  // (구 버전 호환) 환불일 이후 차단
   if (enrollment.refund_date) {
     if (classDate > enrollment.refund_date) {
-      return { canCheck: false, reason: `\ud658\ubd88 \ucc98\ub9ac\uc77c(${enrollment.refund_date}) \uc774\ud6c4 \uc218\uc5c5\uc785\ub2c8\ub2e4` };
+      return { canCheck: false, reason: `환불 처리일(${enrollment.refund_date}) 이후 수업입니다` };
     }
   }
 
-  // (\uad6c \ubc84\uc804 \ud638\ud658) \uc6d4 \uae30\ubc18 \uc885\ub8cc \uc608\uc57d - \ub2e4\uc74c \ub2ec\ubd80\ud130 \ucc28\ub2e8
+  // (구 버전 호환) 월 기반 종료 예약 - 다음 달부터 차단
   if (enrollment.end_from_year && enrollment.end_from_month) {
     const classYear = parseInt(classDate.substring(0, 4), 10);
     const classMonth = parseInt(classDate.substring(5, 7), 10);
     if (classYear > enrollment.end_from_year) {
-      return { canCheck: false, reason: `${enrollment.end_from_year}.${enrollment.end_from_month}\uc6d4 \uc774\ud6c4 \uc218\uac15 \uc885\ub8cc\ub41c \ud68c\uc6d0\uc785\ub2c8\ub2e4` };
+      return { canCheck: false, reason: `${enrollment.end_from_year}.${enrollment.end_from_month}월 이후 수강 종료된 회원입니다` };
     }
     if (classYear === enrollment.end_from_year && classMonth > enrollment.end_from_month) {
-      return { canCheck: false, reason: `${enrollment.end_from_year}.${enrollment.end_from_month}\uc6d4 \uc774\ud6c4 \uc218\uac15 \uc885\ub8cc\ub41c \ud68c\uc6d0\uc785\ub2c8\ub2e4` };
+      return { canCheck: false, reason: `${enrollment.end_from_year}.${enrollment.end_from_month}월 이후 수강 종료된 회원입니다` };
     }
   }
 

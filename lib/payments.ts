@@ -133,12 +133,12 @@ export function isEndedAtMonth(
   year: number,
   month: number
 ): boolean {
-  // \uc989\uc2dc \uc885\ub8cc
+  // 즉시 종료
   if (enrollment.status === 'ended') return true;
 
-  // \ub0a0\uc9dc \uae30\ubc18 \ucc98\ub9ac (end_date \uc6b0\uc120)
-  // end_date\uac00 \uc18d\ud55c \ub2ec\uc758 "\ub2e4\uc74c \ub2ec"\ubd80\ud130 \uc218\ub0a9 \ud654\uba74\uc5d0\uc11c \uc885\ub8cc \ud45c\uc2dc
-  // (end_date \ub2f9\uc6d4\uae4c\uc9c0\ub294 \uc774\ubbf8 \ub0b8 \uc218\uac15\ub8cc\uac00 \uc788\uc744 \uc218 \uc788\uc73c\ubbc0\ub85c \uc720\uc9c0)
+  // 날짜 기반 처리 (end_date 우선)
+  // end_date가 속한 달의 "다음 달"부터 수납 화면에서 종료 표시
+  // (end_date 당월까지는 이미 낸 수강료가 있을 수 있으므로 유지)
   if (enrollment.end_date) {
     const endYear = parseInt(enrollment.end_date.substring(0, 4), 10);
     const endMonth = parseInt(enrollment.end_date.substring(5, 7), 10);
@@ -147,13 +147,13 @@ export function isEndedAtMonth(
     return false;
   }
 
-  // (\uad6c \ubc84\uc804 \ud638\ud658) \uc6d4 \uae30\ubc18 \uc885\ub8cc \uc608\uc57d
+  // (구 버전 호환) 월 기반 종료 예약
   if (enrollment.end_from_year && enrollment.end_from_month) {
     if (year > enrollment.end_from_year) return true;
     if (year === enrollment.end_from_year && month > enrollment.end_from_month) return true;
   }
 
-  // (\uad6c \ubc84\uc804 \ud638\ud658) \ud658\ubd88\uc77c\uc774 \uadf8 \ub2ec\ubcf4\ub2e4 \uc774\uc804\uc774\uba74 \uc885\ub8cc
+  // (구 버전 호환) 환불일이 그 달보다 이전이면 종료
   if (enrollment.refund_date) {
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     if (enrollment.refund_date < monthStart) return true;

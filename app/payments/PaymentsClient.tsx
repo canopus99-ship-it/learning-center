@@ -136,7 +136,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const [receiptNum, setReceiptNum] = useState('');
   const [payMemo, setPayMemo] = useState('');
 
-  // 종료/환불/이월 모달
+  // 수납/환불/이월 모달
   const [endScheduleModalOpen, setEndScheduleModalOpen] = useState(false);
   const [endingEnrollment, setEndingEnrollment] = useState<Enrollment | null>(null);
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
@@ -513,7 +513,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     }
   }
 
-  // 종료 예약 모달
+  // 수납/환불/이월 모달
   function openEndScheduleModal(enrollment: Enrollment) {
     setEndingEnrollment(enrollment);
     setEndDate(new Date().toISOString().split('T')[0]);
@@ -525,11 +525,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   async function handleEndSchedule() {
     if (!endingEnrollment) return;
     if (!endDate) {
-      alert('\ucc98\ub9ac\uc77c\uc744 \uc785\ub825\ud558\uc138\uc694');
+      alert('처리일을 입력하세요');
       return;
     }
-    const memberName = endingEnrollment.members?.name || '\ud68c\uc6d0';
-    const courseName = courses.find(c => c.id === endingEnrollment.course_id)?.name || '\uac15\uc88c';
+    const memberName = endingEnrollment.members?.name || '회원';
+    const courseName = courses.find(c => c.id === endingEnrollment.course_id)?.name || '강좌';
 
     const endYear = parseInt(endDate.substring(0, 4), 10);
     const endMonth = parseInt(endDate.substring(5, 7), 10);
@@ -552,20 +552,19 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     const { error } = await supabase.from('enrollments').update(updates).eq('id', endingEnrollment.id);
 
     if (error) {
-      alert('\ucc98\ub9ac \uc2e4\ud328: ' + error.message);
+      alert('처리 실패: ' + error.message);
     } else {
-      const reasonLabel = endReason === 'refund' ? '\ud658\ubd88' : endReason === 'unregistered' ? '\ubbf8\ub4f1\ub85d(\uc885\ub8cc)' : '\uae30\ud0c0';
-      alert(memberName + '\ub2d8 / ' + courseName + '\\n' + endDate + '\uc790\ub85c ' + reasonLabel + ' \ucc98\ub9ac\ub418\uc5c8\uc2b5\ub2c8\ub2e4.\\n\uc774 \ub0a0\uc9dc \uc774\ud6c4 \ucd9c\uc11d\uccb4\ud06c\uac00 \ucc28\ub2e8\ub429\ub2c8\ub2e4.');
+      const reasonLabel = endReason === 'refund' ? '환불' : endReason === 'unregistered' ? '미등록(종료)' : '이월/기타';
+      alert(`${memberName}님 / ${courseName}\n${endDate}자로 ${reasonLabel} 처리되었습니다.\n이 날짜 이후 출석체크가 차단됩니다.`);
       setEndScheduleModalOpen(false);
       setEndingEnrollment(null);
       loadData();
     }
   }
 
-
-  // 종료 예약 취소
+  // 수납/환불/이월 취소
   async function cancelEndSchedule(enrollment: Enrollment) {
-    if (!confirm('\uc218\ub0a9/\ud658\ubd88/\uc774\uc6d4 \ucc98\ub9ac\ub97c \ucde8\uc18c\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?')) return;
+    if (!confirm('수납/환불/이월 처리를 취소하시겠습니까?')) return;
     const { error } = await supabase.from('enrollments').update({
       end_date: null,
       end_from_year: null,
@@ -782,18 +781,18 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   </span>
                                   {hasEndSchedule && (
                                     <span style={{ ...badgeStyle('#7B3FBF'), fontSize: 11 }}>
-                                      \ud83d\udcc5 {(enrollment as any).end_date || (enrollment.end_from_year + '.' + enrollment.end_from_month)} {enrollment.end_reason === 'refund' ? '\ud658\ubd88' : enrollment.end_reason === 'unregistered' ? '\uc885\ub8cc' : '\uc774\uc6d4/\uae30\ud0c0'}
+                                      📅 {(enrollment as any).end_date || (enrollment.end_from_year + '.' + enrollment.end_from_month)} {enrollment.end_reason === 'refund' ? '환불' : enrollment.end_reason === 'unregistered' ? '종료' : '이월/기타'}
                                     </span>
                                   )}
                                 </div>
                                 <div style={{ display: 'flex', gap: 4 }}>
                                   {hasEndSchedule ? (
                                     <button onClick={() => cancelEndSchedule(enrollment)} style={smallBtnStyle}>
-                                      \ucc98\ub9ac \ucde8\uc18c
+                                      처리 취소
                                     </button>
                                   ) : (
                                     <button onClick={() => openEndScheduleModal(enrollment)} style={smallBtnStyle}>
-                                      \uc218\ub0a9 / \ud658\ubd88 / \uc774\uc6d4
+                                      수납 / 환불 / 이월
                                     </button>
                                   )}
                                 </div>
@@ -1199,7 +1198,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                               selectMember(fakeResult);
                               setActiveTab('by-member');
                             }} style={smallBtnStyle}>회원별 보기</button>
-                            <button onClick={() => openEndScheduleModal(enrollment)} style={smallBtnStyle}>\uc218\ub0a9/\ud658\ubd88/\uc774\uc6d4</button>
+                            <button onClick={() => openEndScheduleModal(enrollment)} style={smallBtnStyle}>수납/환불/이월</button>
                           </td>
                         </tr>
                       );
@@ -1413,21 +1412,21 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       {endScheduleModalOpen && endingEnrollment && (
         <div style={modalOverlayStyle}>
           <div style={modalContentStyle}>
-            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>\uc218\ub0a9 / \ud658\ubd88 / \uc774\uc6d4 \ucc98\ub9ac</h2>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>수납 / 환불 / 이월 처리</h2>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
-              <strong>{endingEnrollment.members?.name}</strong> \u00b7 {courses.find(c => c.id === endingEnrollment.course_id)?.name}
+              <strong>{endingEnrollment.members?.name}</strong> · {courses.find(c => c.id === endingEnrollment.course_id)?.name}
             </p>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>\ucc98\ub9ac\uc77c (\ud68c\uc6d0\uc774 \ud658\ubd88/\uc774\uc6d4 \uc758\uc0ac\ub97c \ubc1d\ud78c \ub0a0)</label>
+              <label style={labelStyle}>처리일 (회원이 환불/이월 의사를 밝힌 날)</label>
               <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={inputStyle} />
               <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
-                \uc774 \ub0a0\uc9dc \uc774\ud6c4\ubd80\ud130 \ucd9c\uc11d\uccb4\ud06c\uac00 \ucc28\ub2e8\ub418\uba70, \ud574\ub2f9 \uc6d4 \uc218\ub0a9 \ud654\uba74\uc5d0\uc11c\ub3c4 \uc81c\uc678\ub429\ub2c8\ub2e4.
+                이 날짜 다음날부터 출석체크가 차단되며, 해당 월 이후 수납 화면에서도 제외됩니다.
               </p>
             </div>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>\ucc98\ub9ac \uad6c\ubd84</label>
+              <label style={labelStyle}>처리 구분</label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {(['unregistered', 'refund', 'other'] as EndReason[]).map(r => (
                   <label key={r} style={{
@@ -1439,10 +1438,10 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                     <input type="radio" checked={endReason === r} onChange={() => setEndReason(r)} />
                     <div>
                       <strong style={{ fontSize: 13 }}>
-                        {r === 'unregistered' ? '\ubbf8\ub4f1\ub85d (\uc790\uc5f0 \uc885\ub8cc)' : r === 'refund' ? '\ud658\ubd88' : '\uc774\uc6d4 / \uae30\ud0c0'}
+                        {r === 'unregistered' ? '미등록 (자연 종료)' : r === 'refund' ? '환불' : '이월 / 기타'}
                       </strong>
                       <p style={{ fontSize: 11, color: '#888', margin: '2px 0 0' }}>
-                        {r === 'unregistered' ? '\ub2e4\uc74c \ub2ec\ubd80\ud130 \uc218\uac15\uc744 \uc548 \ud558\ub294 \uacbd\uc6b0' : r === 'refund' ? '\ud658\ubd88 \uc2e0\uccad\uc11c\ub97c \uc791\uc131\ud55c \uacbd\uc6b0' : '\uc774\uc6d4 \ub610\ub294 \uadf8 \ubc16\uc758 \uc0ac\uc720'}
+                        {r === 'unregistered' ? '다음 달부터 수강을 안 하는 경우' : r === 'refund' ? '환불 신청서를 작성한 경우' : '이월 또는 그 밖의 사유'}
                       </p>
                     </div>
                   </label>
@@ -1451,8 +1450,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
             </div>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>\uba54\ubaa8 (\uc120\ud0dd)</label>
-              <input value={endMemo} onChange={(e) => setEndMemo(e.target.value)} style={inputStyle} placeholder="\uc608: \uc785\uc6d0\uc73c\ub85c \ud658\ubd88 \uc2e0\uccad, 5\uc6d4\ubd84 6\uc6d4\ub85c \uc774\uc6d4 \ub4f1" />
+              <label style={labelStyle}>메모 (선택)</label>
+              <input value={endMemo} onChange={(e) => setEndMemo(e.target.value)} style={inputStyle} placeholder="예: 입원으로 환불 신청, 5월분 6월로 이월 등" />
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>

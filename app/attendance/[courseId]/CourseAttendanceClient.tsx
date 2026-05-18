@@ -374,11 +374,11 @@ export default function CourseAttendanceClient({
                         {idx + 1}. {member.name}
                       </strong>
                       <div style={{ fontSize: 13, marginTop: 4, opacity: 0.8 }}>
-                        {member.phone ? ('\uc804\ud654 \ub05d 4\uc790\ub9ac: ' + member.phone.replace(/[^0-9]/g, '').slice(-4)) : '-'}
+                        {member.phone ? ('전화 끝 4자리: ' + member.phone.replace(/[^0-9]/g, '').slice(-4)) : '-'}
                       </div>
                       {!check.canCheck && (
                         <div style={{ fontSize: 11, marginTop: 2, color: '#A32D2D' }}>
-                          \u26d4 {check.reason}
+                          ⛔ {check.reason}
                         </div>
                       )}
                     </div>
@@ -387,7 +387,7 @@ export default function CourseAttendanceClient({
                       width: 44, height: 44,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}>
-                      {!check.canCheck ? '\u26d4' : (isPresent ? '\u2713' : '\u25cb')}
+                      {!check.canCheck ? '⛔' : (isPresent ? '✓' : '○')}
                     </div>
                   </div>
                 );
@@ -547,7 +547,7 @@ function PrintPage({
     dateColumns.push(null as any);
   }
 
-  // 15\uba85\uc73c\ub85c \ub9de\ucd94\uae30 (\ube48 \ud589 \ucc44\uc6b0\uae30)
+  // 15명으로 맞추기 (빈 행 채우기)
   const studentRows = [...enrollments];
   while (studentRows.length < 15) {
     studentRows.push(null as any);
@@ -570,7 +570,7 @@ function PrintPage({
       color: '#000',
       background: 'white',
     }}>
-      {/* \uc0c1\ub2e8 \ud5e4\ub354 */}
+      {/* 상단 헤더 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div style={{ flex: 1 }}></div>
         <div style={{ flex: 2, textAlign: 'center' }}>
