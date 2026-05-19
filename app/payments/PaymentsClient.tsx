@@ -602,6 +602,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
     // 종료 관련 정보 모두 해제 + 다시 수강중으로
     // (이전 출석/결제 기록은 그대로 유지됨)
+    // 신청일(enrolled_at)은 원래 값 유지 - 처음 이 강좌를 신청한 날이 중요
     const { error } = await supabase.from('enrollments').update({
       status: 'active',
       end_date: null,
@@ -611,7 +612,6 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       refund_date: null,
       refund_memo: null,
       ended_at: null,
-      enrolled_at: new Date(reEnrollDate).toISOString(),
     }).eq('id', reEnrollEnrollment.id);
 
     if (error) {
@@ -674,7 +674,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
       {/* 탭 */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '2px solid #eee' }}>
-        <TabButton active={activeTab === 'by-member'} onClick={() => setActiveTab('by-member')} label="👤 회원별 보기" />
+        <TabButton active={activeTab === 'by-member'} onClick={() => setActiveTab('by-member')} label="👤 수납관리" />
         <TabButton active={activeTab === 'by-course'} onClick={() => setActiveTab('by-course')} label="🎯 강좌별 보기" />
         <TabButton active={activeTab === 'unpaid'} onClick={() => setActiveTab('unpaid')} label={`⚠️ 미납자 점검${allUnpaid.length > 0 ? ` (${allUnpaid.length})` : ''}`} />
       </div>
@@ -838,7 +838,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     </button>
                                   ) : (
                                     <button onClick={() => openEndScheduleModal(enrollment)} style={smallBtnStyle}>
-                                      수납 / 환불 / 이월
+                                      종료 / 환불 / 이월
                                     </button>
                                   )}
                                 </div>
@@ -1246,8 +1246,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                               };
                               selectMember(fakeResult);
                               setActiveTab('by-member');
-                            }} style={smallBtnStyle}>회원별 보기</button>
-                            <button onClick={() => openEndScheduleModal(enrollment)} style={smallBtnStyle}>수납/환불/이월</button>
+                            }} style={smallBtnStyle}>수납관리</button>
                           </td>
                         </tr>
                       );
@@ -1263,9 +1262,9 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
               }}>
                 <strong>💡 안내</strong>
                 <ul style={{ margin: '6px 0 0', paddingLeft: 20, lineHeight: 1.6 }}>
-                  <li><strong>회원별 보기</strong>: 해당 회원의 연간 수납 현황을 보면서 결제 처리</li>
-                  <li><strong>종료 예약</strong>: 특정 월부터 수강 종료로 처리 (그 월부터 미납자에서 제외)</li>
-                  <li><strong>대기자가 있는 경우</strong>: 미납자 종료 후 대기자에게 연락하여 자리 채우기</li>
+                  <li><strong>수납관리</strong>: 해당 회원의 연간 수납 화면으로 이동하여 결제/환불/이월 처리</li>
+                  <li><strong>안내 문자 발송 시</strong>: 강좌별로 이름·연락처를 확인하여 발송하세요</li>
+                  <li><strong>대기자가 있는 경우</strong>: 미납자 정리 후 대기자에게 연락하여 자리 채우기</li>
                 </ul>
               </div>
             </div>
@@ -1469,7 +1468,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       {endScheduleModalOpen && endingEnrollment && (
         <div style={modalOverlayStyle}>
           <div style={modalContentStyle}>
-            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>수납 / 환불 / 이월 처리</h2>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>종료 / 환불 / 이월 처리</h2>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
               <strong>{endingEnrollment.members?.name}</strong> · {courses.find(c => c.id === endingEnrollment.course_id)?.name}
             </p>

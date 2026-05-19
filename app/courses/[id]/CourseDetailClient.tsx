@@ -932,7 +932,7 @@ export default function CourseDetailClient({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>📅 수업 날짜 / 출석부 관리</h3>
+            <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>📅 수업 날짜 관리</h3>
             <p style={{ fontSize: 13, margin: 0, color: '#6E7E97' }}>수업 날짜 확인, 휴강·보강 처리</p>
           </div>
           <span style={{ fontSize: 18 }}>→</span>
