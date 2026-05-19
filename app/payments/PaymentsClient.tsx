@@ -63,6 +63,12 @@ type Payment = {
   is_annual: boolean;
   is_free: boolean;
   memo: string | null;
+  status_type: string | null;
+  refund_amount: number | null;
+  refund_date: string | null;
+  refund_method: string | null;
+  carryover_amount: number | null;
+  carryover_date: string | null;
 };
 
 type MemberSearchResult = {
@@ -147,6 +153,17 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const [reEnrollModalOpen, setReEnrollModalOpen] = useState(false);
   const [reEnrollEnrollment, setReEnrollEnrollment] = useState<Enrollment | null>(null);
   const [reEnrollDate, setReEnrollDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // 환불 모달 (여러 달 일괄)
+  const [refundModalOpen, setRefundModalOpen] = useState(false);
+  const [refundDate, setRefundDate] = useState(new Date().toISOString().split('T')[0]);
+  const [refundMethod, setRefundMethod] = useState<'card_cancel' | 'transfer'>('card_cancel');
+  const [refundAmounts, setRefundAmounts] = useState<Record<string, number>>({});
+
+  // 이월 모달 (여러 달 일괄)
+  const [carryoverModalOpen, setCarryoverModalOpen] = useState(false);
+  const [carryoverDate, setCarryoverDate] = useState(new Date().toISOString().split('T')[0]);
+  const [carryoverAmounts, setCarryoverAmounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     loadData();
@@ -624,6 +641,132 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     }
   }
 
+  // 선택된 셀 중 "결제완료된" 것만 (환불/이월 대상)
+  function getSelectedPaidItems(): Array<{ key: string; courseId: number; courseName: string; month: number; payment: Payment }> {
+    if (!selectedMember) return [];
+    const result: Array<{ key: string; courseId: number; courseName: string; month: number; payment: Payment }> = [];
+    selectedCells.forEach(key => {
+      const [cidStr, mStr] = key.split('-');
+      const courseId = parseInt(cidStr, 10);
+      const month = parseInt(mStr, 10);
+      const course = courses.find(co => co.id === courseId);
+      if (!course) return;
+      const enr = enrollments.find(e => e.member_id === selectedMember.id && e.course_id === courseId);
+      if (!enr) return;
+      const p = getPayment(enr.id, month);
+      if (p && p.is_paid) {
+        result.push({ key, courseId, courseName: course.name, month, payment: p });
+      }
+    });
+    return result;
+  }
+
+  // 환불 모달 열기
+  function openRefundModal() {
+    const items = getSelectedPaidItems();
+    if (items.length === 0) {
+      alert('환불은 결제완료(등록)된 월만 가능합니다. 등록된 셀을 선택하세요.');
+      return;
+    }
+    const init: Record<string, number> = {};
+    items.forEach(it => { init[it.key] = it.payment.amount; });
+    setRefundAmounts(init);
+    setRefundDate(new Date().toISOString().split('T')[0]);
+    setRefundMethod('card_cancel');
+    setRefundModalOpen(true);
+  }
+
+  // 환불 저장
+  async function handleRefundSave() {
+    const items = getSelectedPaidItems();
+    if (items.length === 0) return;
+    let hasError = false;
+
+    for (const it of items) {
+      const amt = refundAmounts[it.key] ?? it.payment.amount;
+      const { error } = await supabase.from('payments').update({
+        status_type: 'refunded',
+        refund_amount: amt,
+        refund_date: refundDate,
+        refund_method: refundMethod,
+        updated_at: new Date().toISOString(),
+      }).eq('id', it.payment.id);
+      if (error) { hasError = true; console.error('환불 처리 실패:', error); }
+    }
+
+    if (hasError) alert('일부 환불 처리에 실패했습니다.');
+    else alert(`${items.length}건 환불 처리되었습니다.`);
+
+    setRefundModalOpen(false);
+    setSelectedCells(new Set());
+    loadData();
+  }
+
+  // 이월 모달 열기
+  function openCarryoverModal() {
+    const items = getSelectedPaidItems();
+    if (items.length === 0) {
+      alert('이월은 결제완료(등록)된 월만 가능합니다. 등록된 셀을 선택하세요.');
+      return;
+    }
+    const init: Record<string, number> = {};
+    items.forEach(it => { init[it.key] = it.payment.amount; });
+    setCarryoverAmounts(init);
+    setCarryoverDate(new Date().toISOString().split('T')[0]);
+    setCarryoverModalOpen(true);
+  }
+
+  // 이월 저장
+  async function handleCarryoverSave() {
+    const items = getSelectedPaidItems();
+    if (items.length === 0) return;
+    let hasError = false;
+
+    for (const it of items) {
+      const amt = carryoverAmounts[it.key] ?? it.payment.amount;
+      const { error } = await supabase.from('payments').update({
+        status_type: 'carryover',
+        carryover_amount: amt,
+        carryover_date: carryoverDate,
+        updated_at: new Date().toISOString(),
+      }).eq('id', it.payment.id);
+      if (error) { hasError = true; console.error('이월 처리 실패:', error); }
+    }
+
+    if (hasError) alert('일부 이월 처리에 실패했습니다.');
+    else alert(`${items.length}건 이월 처리되었습니다.`);
+
+    setCarryoverModalOpen(false);
+    setSelectedCells(new Set());
+    loadData();
+  }
+
+  // 환불/이월 취소 (결제 모달에서 호출 - 그 달을 다시 등록 상태로)
+  async function clearRefundCarryover(paymentId: number) {
+    const { error } = await supabase.from('payments').update({
+      status_type: null,
+      refund_amount: null,
+      refund_date: null,
+      refund_method: null,
+      carryover_amount: null,
+      carryover_date: null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', paymentId);
+    if (error) alert('취소 실패: ' + error.message);
+    else loadData();
+  }
+
+  // 이 회원-강좌에서 환불/이월된 가장 빠른 달 (그 다음 달부터 미등록 처리용)
+  function getRefundCarryoverStartMonth(enrollmentId: number): number | null {
+    const ps = payments.filter(p =>
+      p.enrollment_id === enrollmentId &&
+      p.payment_year === selectedYear &&
+      (p.status_type === 'refunded' || p.status_type === 'carryover')
+    );
+    if (ps.length === 0) return null;
+    return Math.min(...ps.map(p => p.payment_month));
+  }
+
   const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
   const today = new Date();
   const todayYear = today.getFullYear();
@@ -856,6 +999,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   const isSelected = selectedCells.has(cellKey(course.id, month));
                                   const isAnnualHere = isAnnualChecked && month >= 2;
 
+                                  // 환불/이월 시작 월 (그 다음 달부터 미등록)
+                                  const rcStartMonth = getRefundCarryoverStartMonth(enrollment.id);
+                                  const isAfterRefundCarryover = rcStartMonth !== null && month > rcStartMonth;
+                                  const thisMonthStatus = payment?.status_type || null;
+
                                   // 상태 결정
                                   let label = '';
                                   let bgColor = '#fafafa';
@@ -867,6 +1015,23 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     bgColor = '#f0f0f0';
                                     textColor = '#bbb';
                                     canSelect = false;
+                                  } else if (thisMonthStatus === 'refunded') {
+                                    // 환불된 달: 결제기록 유지 + 환불 표시 (셀 색 주황)
+                                    label = '환불';
+                                    bgColor = '#E8820E';
+                                    textColor = 'white';
+                                    canSelect = true; // 클릭 시 결제 모달(환불 취소 가능)
+                                  } else if (thisMonthStatus === 'carryover') {
+                                    // 이월된 달 (셀 색 보라)
+                                    label = '이월';
+                                    bgColor = '#7B3FBF';
+                                    textColor = 'white';
+                                    canSelect = true;
+                                  } else if (isAfterRefundCarryover && !isPaid) {
+                                    // 환불/이월한 달의 다음 달부터 = 미등록 (수강종료 아님)
+                                    label = isOTMonth ? '미등록 (OT)' : '미등록';
+                                    bgColor = '#fafafa';
+                                    textColor = '#888';
                                   } else if (isEnded) {
                                     label = '수강종료';
                                     bgColor = '#3F3F3F';
@@ -901,7 +1066,10 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                       key={month}
                                       onClick={() => {
                                         if (!canSelect || isAnnualHere) return;
-                                        if (isEnded) {
+                                        if (thisMonthStatus === 'refunded' || thisMonthStatus === 'carryover') {
+                                          // 환불/이월된 셀: 결제 모달 (정보 확인 + 환불/이월 취소)
+                                          openPaymentModal(enrollment, course, month);
+                                        } else if (isEnded) {
                                           // 수강종료 셀: 재등록 모달
                                           openReEnrollModal(enrollment);
                                         } else if (payment?.is_paid) {
@@ -929,11 +1097,19 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                       <div style={{ fontSize: 10, marginTop: 2 }}>
                                         {isAnnualHere ? '연납' : label}
                                       </div>
-                                      {payment?.is_paid && payment.amount > 0 && (
+                                      {thisMonthStatus === 'refunded' ? (
+                                        <div style={{ fontSize: 9, marginTop: 2, opacity: 0.95 }}>
+                                          {(payment?.refund_amount ?? 0).toLocaleString()}원
+                                        </div>
+                                      ) : thisMonthStatus === 'carryover' ? (
+                                        <div style={{ fontSize: 9, marginTop: 2, opacity: 0.95 }}>
+                                          {(payment?.carryover_amount ?? 0).toLocaleString()}원
+                                        </div>
+                                      ) : payment?.is_paid && payment.amount > 0 ? (
                                         <div style={{ fontSize: 9, marginTop: 2, opacity: 0.9 }}>
                                           {payment.amount.toLocaleString()}
                                         </div>
-                                      )}
+                                      ) : null}
                                     </div>
                                   );
                                 })}
@@ -989,14 +1165,26 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   총 {selectionTotal.toLocaleString()}원
                                 </span>
                               </div>
-                              <div style={{ display: 'flex', gap: 8 }}>
+                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                                 <button onClick={() => { setSelectedCells(new Set()); setSelectedAnnualCourses(new Set()); }} style={secondaryBtnStyle}>선택 해제</button>
                                 <button onClick={openBulkPayModal} style={{
-                                  padding: '12px 24px',
+                                  padding: '12px 20px',
                                   background: '#1D9E75', color: 'white',
                                   border: 'none', borderRadius: 6, cursor: 'pointer',
                                   fontSize: 14, fontWeight: 500,
-                                }}>💰 일괄 결제 처리</button>
+                                }}>💰 결제</button>
+                                <button onClick={openRefundModal} style={{
+                                  padding: '12px 20px',
+                                  background: '#E8820E', color: 'white',
+                                  border: 'none', borderRadius: 6, cursor: 'pointer',
+                                  fontSize: 14, fontWeight: 500,
+                                }}>↩️ 환불</button>
+                                <button onClick={openCarryoverModal} style={{
+                                  padding: '12px 20px',
+                                  background: '#7B3FBF', color: 'white',
+                                  border: 'none', borderRadius: 6, cursor: 'pointer',
+                                  fontSize: 14, fontWeight: 500,
+                                }}>📦 이월</button>
                               </div>
                             </div>
                           </div>
@@ -1355,7 +1543,44 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
               <button onClick={() => setPaymentModalOpen(false)} style={secondaryBtnStyle}>취소</button>
             </div>
 
-            {editingPayment.existing && (
+            {editingPayment.existing && (editingPayment.existing.status_type === 'refunded' || editingPayment.existing.status_type === 'carryover') && (
+              <div style={{
+                marginTop: 12, padding: 12,
+                background: '#FFF4E5', border: '1px solid #F0C088',
+                borderRadius: 6, fontSize: 12, color: '#7A4A0E',
+              }}>
+                {editingPayment.existing.status_type === 'refunded' ? (
+                  <div>
+                    <strong>↩️ 환불 처리됨</strong><br />
+                    환불일: {editingPayment.existing.refund_date || '-'} ·
+                    금액: {(editingPayment.existing.refund_amount ?? 0).toLocaleString()}원 ·
+                    방식: {editingPayment.existing.refund_method === 'card_cancel' ? '카드취소' : editingPayment.existing.refund_method === 'transfer' ? '계좌이체' : '-'}
+                  </div>
+                ) : (
+                  <div>
+                    <strong>📦 이월 처리됨</strong><br />
+                    이월일: {editingPayment.existing.carryover_date || '-'} ·
+                    금액: {(editingPayment.existing.carryover_amount ?? 0).toLocaleString()}원
+                  </div>
+                )}
+                <button
+                  onClick={() => {
+                    if (confirm('이 환불/이월 처리를 취소하시겠습니까?\n(결제완료 상태로 되돌아갑니다)')) {
+                      clearRefundCarryover(editingPayment.existing!.id);
+                      setPaymentModalOpen(false);
+                    }
+                  }}
+                  style={{
+                    marginTop: 8, padding: '6px 12px',
+                    background: 'white', color: '#7A4A0E',
+                    border: '1px solid #F0C088', borderRadius: 4,
+                    cursor: 'pointer', fontSize: 12,
+                  }}
+                >환불/이월 취소 (등록 상태로 되돌리기)</button>
+              </div>
+            )}
+
+            {editingPayment.existing && !(editingPayment.existing.status_type === 'refunded' || editingPayment.existing.status_type === 'carryover') && (
               <div style={{
                 marginTop: 12, padding: 10,
                 background: '#FCEBEB', border: '1px solid #F09595',
@@ -1525,6 +1750,154 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       {/* ============================================ */}
       {/* 재등록 모달                                      */}
       {/* ============================================ */}
+      {/* ============================================ */}
+      {/* 환불 모달 (여러 달 일괄)                          */}
+      {/* ============================================ */}
+      {refundModalOpen && selectedMember && (() => {
+        const items = getSelectedPaidItems();
+        const total = items.reduce((s, it) => s + (refundAmounts[it.key] ?? it.payment.amount), 0);
+        return (
+          <div style={modalOverlayStyle}>
+            <div style={{ ...modalContentStyle, maxWidth: 600 }}>
+              <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>↩️ 환불 처리</h2>
+              <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+                <strong>{selectedMember.name}</strong>님 · 선택한 {items.length}건
+              </p>
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>환불 항목 (금액 직접 입력)</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto', border: '1px solid #eee', borderRadius: 6, padding: 8 }}>
+                  {items.map(it => (
+                    <div key={it.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 8, background: '#fafafa', borderRadius: 4 }}>
+                      <div style={{ flex: 1 }}>
+                        <strong style={{ fontSize: 13 }}>{it.courseName}</strong>
+                        <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>{it.month}월 (결제 {it.payment.amount.toLocaleString()}원)</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={(refundAmounts[it.key] ?? it.payment.amount).toLocaleString()}
+                        onChange={(e) => {
+                          const n = parseInt(e.target.value.replace(/[^0-9]/g, ''), 10) || 0;
+                          setRefundAmounts(prev => ({ ...prev, [it.key]: n }));
+                        }}
+                        style={{ ...inputStyle, width: 110, textAlign: 'right' }}
+                      />
+                      <span style={{ fontSize: 12, color: '#888' }}>원</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ padding: 10, background: '#FFF4E5', border: '1px solid #F0C088', borderRadius: 6, marginBottom: 16, fontSize: 14, textAlign: 'right' }}>
+                <strong>총 환불 금액: <span style={{ color: '#E8820E', fontSize: 18 }}>{total.toLocaleString()}원</span></strong>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                <div>
+                  <label style={labelStyle}>환불일</label>
+                  <input type="date" value={refundDate} onChange={(e) => setRefundDate(e.target.value)} style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>환불 방식</label>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button onClick={() => setRefundMethod('card_cancel')} style={{
+                      flex: 1, padding: '8px', fontSize: 13,
+                      background: refundMethod === 'card_cancel' ? '#185FA5' : 'white',
+                      color: refundMethod === 'card_cancel' ? 'white' : '#666',
+                      border: '1px solid ' + (refundMethod === 'card_cancel' ? '#185FA5' : '#ddd'),
+                      borderRadius: 6, cursor: 'pointer',
+                    }}>카드취소</button>
+                    <button onClick={() => setRefundMethod('transfer')} style={{
+                      flex: 1, padding: '8px', fontSize: 13,
+                      background: refundMethod === 'transfer' ? '#185FA5' : 'white',
+                      color: refundMethod === 'transfer' ? 'white' : '#666',
+                      border: '1px solid ' + (refundMethod === 'transfer' ? '#185FA5' : '#ddd'),
+                      borderRadius: 6, cursor: 'pointer',
+                    }}>계좌이체</button>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ background: '#E6F1FB', border: '1px solid #B5D4F4', padding: 10, borderRadius: 6, fontSize: 11, color: '#042C53', marginBottom: 16 }}>
+                💡 환불 처리하면 그 달은 "환불"로 표시되고(결제기록은 유지), <strong>그 다음 달부터 자동으로 미등록</strong> 상태가 됩니다.
+              </div>
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={handleRefundSave} style={{
+                  flex: 1, padding: '12px', background: '#E8820E', color: 'white',
+                  border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 500,
+                }}>↩️ {items.length}건 환불 처리</button>
+                <button onClick={() => setRefundModalOpen(false)} style={secondaryBtnStyle}>취소</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ============================================ */}
+      {/* 이월 모달 (여러 달 일괄)                          */}
+      {/* ============================================ */}
+      {carryoverModalOpen && selectedMember && (() => {
+        const items = getSelectedPaidItems();
+        const total = items.reduce((s, it) => s + (carryoverAmounts[it.key] ?? it.payment.amount), 0);
+        return (
+          <div style={modalOverlayStyle}>
+            <div style={{ ...modalContentStyle, maxWidth: 600 }}>
+              <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>📦 이월 처리</h2>
+              <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+                <strong>{selectedMember.name}</strong>님 · 선택한 {items.length}건
+              </p>
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>이월 항목 (금액 직접 입력)</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto', border: '1px solid #eee', borderRadius: 6, padding: 8 }}>
+                  {items.map(it => (
+                    <div key={it.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 8, background: '#fafafa', borderRadius: 4 }}>
+                      <div style={{ flex: 1 }}>
+                        <strong style={{ fontSize: 13 }}>{it.courseName}</strong>
+                        <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>{it.month}월 (결제 {it.payment.amount.toLocaleString()}원)</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={(carryoverAmounts[it.key] ?? it.payment.amount).toLocaleString()}
+                        onChange={(e) => {
+                          const n = parseInt(e.target.value.replace(/[^0-9]/g, ''), 10) || 0;
+                          setCarryoverAmounts(prev => ({ ...prev, [it.key]: n }));
+                        }}
+                        style={{ ...inputStyle, width: 110, textAlign: 'right' }}
+                      />
+                      <span style={{ fontSize: 12, color: '#888' }}>원</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ padding: 10, background: '#F3EBFB', border: '1px solid #C9A8E6', borderRadius: 6, marginBottom: 16, fontSize: 14, textAlign: 'right' }}>
+                <strong>총 이월 금액: <span style={{ color: '#7B3FBF', fontSize: 18 }}>{total.toLocaleString()}원</span></strong>
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={labelStyle}>이월일</label>
+                <input type="date" value={carryoverDate} onChange={(e) => setCarryoverDate(e.target.value)} style={inputStyle} />
+              </div>
+
+              <div style={{ background: '#E6F1FB', border: '1px solid #B5D4F4', padding: 10, borderRadius: 6, fontSize: 11, color: '#042C53', marginBottom: 16 }}>
+                💡 이월 처리하면 그 달은 "이월"로 표시되고, <strong>그 다음 달부터 자동으로 미등록</strong> 됩니다.
+                실제 이월금 합산은 다음 달 결제 시 금액을 수정하고 메모(비고)에 적어주세요.
+              </div>
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={handleCarryoverSave} style={{
+                  flex: 1, padding: '12px', background: '#7B3FBF', color: 'white',
+                  border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 500,
+                }}>📦 {items.length}건 이월 처리</button>
+                <button onClick={() => setCarryoverModalOpen(false)} style={secondaryBtnStyle}>취소</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {reEnrollModalOpen && reEnrollEnrollment && (
         <div style={modalOverlayStyle}>
           <div style={modalContentStyle}>
