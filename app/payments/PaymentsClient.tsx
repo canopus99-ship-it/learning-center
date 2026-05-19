@@ -122,6 +122,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
   // 일괄 결제 모달
   const [bulkPayModalOpen, setBulkPayModalOpen] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
   const [bulkPayMethod, setBulkPayMethod] = useState<PaymentMethod>('cash');
   const [bulkPayDate, setBulkPayDate] = useState(new Date().toISOString().split('T')[0]);
   const [bulkReceiptNum, setBulkReceiptNum] = useState('');
@@ -350,6 +351,30 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setBulkPayMethod('cash');
     setBulkPayDate(new Date().toISOString().split('T')[0]);
     setBulkReceiptNum('');
+    setIsEditMode(false);
+    setBulkPayModalOpen(true);
+  }
+
+  // 수정 모달: 이미 결제된 셀들의 정보를 불러와서 각각 수정
+  function openBulkEditModal() {
+    if (!selectedMember) return;
+    const items = getSelectedPaidItems();
+    if (items.length === 0) {
+      alert('수정할 항목이 없습니다.\n결제완료된 셀(등록/환불/이월)을 선택하세요.');
+      return;
+    }
+    // 현재 결제 금액으로 초기화
+    const initialAmounts: Record<string, number> = {};
+    items.forEach(it => {
+      initialAmounts[`${it.courseId}-${it.month}`] = it.payment.amount;
+    });
+    setCellAmounts(initialAmounts);
+    // 첫 항목의 결제방법/날짜를 기본값으로
+    const first = items[0].payment;
+    setBulkPayMethod((first.payment_method as any) || 'cash');
+    setBulkPayDate(first.paid_at || new Date().toISOString().split('T')[0]);
+    setBulkReceiptNum(first.receipt_number || '');
+    setIsEditMode(true);
     setBulkPayModalOpen(true);
   }
 
@@ -535,6 +560,27 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     }
   }
 
+  // 선택한 셀들의 결제기록 일괄 삭제 (결제취소)
+  async function handleBulkDeletePayment() {
+    if (!selectedMember) return;
+    const items = getSelectedPaidItems();
+    if (items.length === 0) {
+      alert('결제 취소할 항목이 없습니다.\n결제완료(등록/환불/이월)된 셀을 선택하세요.');
+      return;
+    }
+    if (!confirm(`선택한 ${items.length}건의 결제 기록을 삭제하시겠습니까?\n\n결제 기록이 완전히 삭제되어 미납 또는 미등록 상태로 돌아갑니다.\n(환불과는 다른 기능 - 잘못 입력한 결제를 정정할 때 사용)`)) return;
+
+    let hasError = false;
+    for (const it of items) {
+      const { error } = await supabase.from('payments').delete().eq('id', it.payment.id);
+      if (error) { hasError = true; console.error('결제취소 실패:', error); }
+    }
+    if (hasError) alert('일부 결제취소에 실패했습니다.');
+    else alert(`${items.length}건의 결제가 취소되었습니다.`);
+    setSelectedCells(new Set());
+    loadData();
+  }
+
   // 수납/환불/이월 모달
   function openEndScheduleModal(enrollment: Enrollment) {
     setEndingEnrollment(enrollment);
@@ -654,7 +700,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       const enr = enrollments.find(e => e.member_id === selectedMember.id && e.course_id === courseId);
       if (!enr) return;
       const p = getPayment(enr.id, month);
-      if (p && p.is_paid) {
+      if (p && (p.is_paid || p.status_type === 'refunded' || p.status_type === 'carryover')) {
         result.push({ key, courseId, courseName: course.name, month, payment: p });
       }
     });
@@ -933,8 +979,9 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                           borderRadius: 6, fontSize: 12, color: '#042C53',
                         }}>
                           💡 <strong>사용 방법</strong>:
-                          미납/미등록 셀(빨강·흰색)은 <strong>클릭하여 선택</strong>한 뒤 일괄 결제하세요.
-                          이미 등록된 셀(초록)을 <strong>클릭하면 결제 정보 수정/취소</strong> 모달이 열립니다.
+                          원하는 월 셀을 <strong>클릭하여 선택</strong>(여러 개·여러 강좌 가능)한 뒤
+                          아래 <strong>[결제] [환불] [이월]</strong> 버튼을 누르세요.
+                          1개만 선택하면 <strong>[상세/수정]</strong>으로 결제 정보 확인·수정·취소가 가능합니다.
                         </div>
                         {memberEnrollments.map(enrollment => {
                           const course = courses.find(c => c.id === enrollment.course_id);
@@ -1066,17 +1113,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                       key={month}
                                       onClick={() => {
                                         if (!canSelect || isAnnualHere) return;
-                                        if (thisMonthStatus === 'refunded' || thisMonthStatus === 'carryover') {
-                                          // 환불/이월된 셀: 결제 모달 (정보 확인 + 환불/이월 취소)
-                                          openPaymentModal(enrollment, course, month);
-                                        } else if (isEnded) {
+                                        if (isEnded) {
                                           // 수강종료 셀: 재등록 모달
                                           openReEnrollModal(enrollment);
-                                        } else if (payment?.is_paid) {
-                                          // 이미 결제 완료된 셀: 결제 모달 (수정/취소)
-                                          openPaymentModal(enrollment, course, month);
                                         } else {
-                                          // 미납/미등록 셀: 선택 토글 (다중 선택 가능)
+                                          // 그 외 모든 셀(미납/미등록/등록/환불/이월): 선택 토글
+                                          // 결제/환불/이월/수정은 선택 후 아래 버튼으로
                                           toggleCell(course.id, month);
                                         }
                                       }}
@@ -1168,23 +1210,35 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                                 <button onClick={() => { setSelectedCells(new Set()); setSelectedAnnualCourses(new Set()); }} style={secondaryBtnStyle}>선택 해제</button>
                                 <button onClick={openBulkPayModal} style={{
-                                  padding: '12px 20px',
+                                  padding: '12px 18px',
                                   background: '#1D9E75', color: 'white',
                                   border: 'none', borderRadius: 6, cursor: 'pointer',
                                   fontSize: 14, fontWeight: 500,
                                 }}>💰 결제</button>
                                 <button onClick={openRefundModal} style={{
-                                  padding: '12px 20px',
+                                  padding: '12px 18px',
                                   background: '#E8820E', color: 'white',
                                   border: 'none', borderRadius: 6, cursor: 'pointer',
                                   fontSize: 14, fontWeight: 500,
                                 }}>↩️ 환불</button>
                                 <button onClick={openCarryoverModal} style={{
-                                  padding: '12px 20px',
+                                  padding: '12px 18px',
                                   background: '#7B3FBF', color: 'white',
                                   border: 'none', borderRadius: 6, cursor: 'pointer',
                                   fontSize: 14, fontWeight: 500,
                                 }}>📦 이월</button>
+                                <button onClick={handleBulkDeletePayment} style={{
+                                  padding: '12px 18px',
+                                  background: '#A32D2D', color: 'white',
+                                  border: 'none', borderRadius: 6, cursor: 'pointer',
+                                  fontSize: 14, fontWeight: 500,
+                                }}>🗑️ 결제취소</button>
+                                <button onClick={openBulkEditModal} style={{
+                                  padding: '12px 18px',
+                                  background: 'white', color: '#185FA5',
+                                  border: '1px solid #185FA5', borderRadius: 6, cursor: 'pointer',
+                                  fontSize: 14, fontWeight: 500,
+                                }}>✏️ 수정</button>
                               </div>
                             </div>
                           </div>
@@ -1601,15 +1655,20 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       {bulkPayModalOpen && selectedMember && (
         <div style={modalOverlayStyle}>
           <div style={{ ...modalContentStyle, maxWidth: 700 }}>
-            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>일괄 결제 처리</h2>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>{isEditMode ? '✏️ 결제 정보 수정' : '💰 결제 처리'}</h2>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
-              <strong>{selectedMember.name}</strong>님 · 선택한 {selectionItems.length}건
+              <strong>{selectedMember.name}</strong>님 · {isEditMode ? '결제완료된 ' : '선택한 '}
+              {(isEditMode ? getSelectedPaidItems().length : selectionItems.length)}건
+              {isEditMode && <span style={{ color: '#E8820E', marginLeft: 8 }}>(미납 셀은 제외하고 결제된 것만 수정합니다)</span>}
             </p>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>결제 항목 (금액 수기 수정 가능)</label>
+              <label style={labelStyle}>{isEditMode ? '수정할 항목 (금액 변경)' : '결제 항목 (금액 수기 수정 가능)'}</label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto', border: '1px solid #eee', borderRadius: 6, padding: 8 }}>
-                {selectionItems.map((item, idx) => {
+                {(isEditMode
+                  ? getSelectedPaidItems().map(it => ({ courseId: it.courseId, courseName: it.courseName, month: it.month, amount: it.payment.amount, isAnnual: false }))
+                  : selectionItems
+                ).map((item, idx) => {
                   const key = item.isAnnual ? `annual-${item.courseId}` : `${item.courseId}-${item.month}`;
                   const currentAmount = cellAmounts[key] ?? item.amount;
                   return (
@@ -1677,11 +1736,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
             <div style={{ display: 'flex', gap: 8 }}>
               <button onClick={handleBulkSave} style={{
                 flex: 1, padding: '12px',
-                background: '#1D9E75', color: 'white',
+                background: isEditMode ? '#185FA5' : '#1D9E75', color: 'white',
                 border: 'none', borderRadius: 6, cursor: 'pointer',
                 fontSize: 14, fontWeight: 500,
-              }}>✓ 결제 처리</button>
-              <button onClick={() => setBulkPayModalOpen(false)} style={secondaryBtnStyle}>취소</button>
+              }}>{isEditMode ? '✏️ 수정 저장' : '✓ 결제 처리'}</button>
+              <button onClick={() => { setBulkPayModalOpen(false); setIsEditMode(false); }} style={secondaryBtnStyle}>취소</button>
             </div>
           </div>
         </div>
