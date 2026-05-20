@@ -1136,22 +1136,39 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                       }}
                                     >
                                       <div style={{ fontSize: 11, fontWeight: 500 }}>{month}월</div>
-                                      <div style={{ fontSize: 10, marginTop: 2 }}>
-                                        {isAnnualHere ? '연납' : label}
-                                      </div>
-                                      {thisMonthStatus === 'refunded' ? (
-                                        <div style={{ fontSize: 9, marginTop: 2, opacity: 0.95 }}>
-                                          {(payment?.refund_amount ?? 0).toLocaleString()}원
-                                        </div>
-                                      ) : thisMonthStatus === 'carryover' ? (
-                                        <div style={{ fontSize: 9, marginTop: 2, opacity: 0.95 }}>
-                                          {(payment?.carryover_amount ?? 0).toLocaleString()}원
-                                        </div>
-                                      ) : payment?.is_paid && payment.amount > 0 ? (
-                                        <div style={{ fontSize: 9, marginTop: 2, opacity: 0.9 }}>
-                                          {payment.amount.toLocaleString()}
-                                        </div>
-                                      ) : null}
+                                      {thisMonthStatus === 'refunded' || thisMonthStatus === 'carryover' ? (
+                                        <>
+                                          {/* 위: 원래 결제 정보 (등록) */}
+                                          {payment && payment.amount > 0 && (
+                                            <>
+                                              <div style={{ fontSize: 10, marginTop: 2, opacity: 0.85 }}>등록</div>
+                                              <div style={{ fontSize: 9, opacity: 0.85 }}>
+                                                {payment.amount.toLocaleString()}원
+                                              </div>
+                                            </>
+                                          )}
+                                          {/* 구분선 */}
+                                          <div style={{ height: 1, background: 'rgba(255,255,255,0.4)', margin: '3px 4px' }} />
+                                          {/* 아래: 환불/이월 정보 */}
+                                          <div style={{ fontSize: 10, fontWeight: 600 }}>
+                                            {thisMonthStatus === 'refunded' ? '환불' : '이월'}
+                                          </div>
+                                          <div style={{ fontSize: 9, opacity: 0.95 }}>
+                                            {((thisMonthStatus === 'refunded' ? payment?.refund_amount : payment?.carryover_amount) ?? 0).toLocaleString()}원
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <div style={{ fontSize: 10, marginTop: 2 }}>
+                                            {isAnnualHere ? '연납' : label}
+                                          </div>
+                                          {payment?.is_paid && payment.amount > 0 && (
+                                            <div style={{ fontSize: 9, marginTop: 2, opacity: 0.9 }}>
+                                              {payment.amount.toLocaleString()}
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
                                     </div>
                                   );
                                 })}
