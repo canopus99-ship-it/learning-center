@@ -106,6 +106,18 @@ export default function MemberDetailClient({
   const [isDiscount50, setIsDiscount50] = useState(member.is_discount_50);
   const [isDiscount100, setIsDiscount100] = useState(member.is_discount_100);
   const [memo, setMemo] = useState(member.memo || '');
+
+  // 수강 종료 모달
+  const [endModalOpen, setEndModalOpen] = useState(false);
+  const [endingEnrollment, setEndingEnrollment] = useState<Enrollment | null>(null);
+  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endReason, setEndReason] = useState<'self_request' | 'staff_action'>('self_request');
+  const [endMemo, setEndMemo] = useState('');
+
+  // 수강 재개 모달
+  const [resumeModalOpen, setResumeModalOpen] = useState(false);
+  const [resumingEnrollment, setResumingEnrollment] = useState<Enrollment | null>(null);
+  const [resumeDate, setResumeDate] = useState(new Date().toISOString().split('T')[0]);
   const [birthDate, setBirthDate] = useState(member.birth_date || '');
   const [gender, setGender] = useState(member.gender || '');
   const [regionType, setRegionType] = useState(member.region_type || '');
@@ -343,24 +355,13 @@ export default function MemberDetailClient({
   }
 
   async function handleChangeEnrollmentStatus(e: Enrollment, newStatus: EnrollmentStatus) {
+    // 대기 → 수강중 전환 등 단순 상태 변경만 처리
     const statusLabel = STATUS_LABELS[newStatus];
     if (!confirm(`"${e.courses?.name}"의 상태를 "${statusLabel}"로 변경하시겠습니까?`)) return;
 
     const updates: any = { status: newStatus };
-
-    if (newStatus === 'ended') {
-      updates.ended_at = new Date().toISOString();
+    if (newStatus === 'active') {
       updates.waiting_order = null;
-    } else if (newStatus === 'paused') {
-      updates.pause_start = new Date().toISOString();
-      updates.waiting_order = null;
-    } else if (newStatus === 'active') {
-      updates.waiting_order = null;
-      if (e.status === 'paused') updates.pause_end = new Date().toISOString();
-      if (e.status === 'ended') {
-        updates.ended_at = null;
-        updates.enrolled_at = new Date().toISOString();
-      }
     }
 
     const { error } = await supabase.from('enrollments').update(updates).eq('id', e.id);
@@ -368,8 +369,76 @@ export default function MemberDetailClient({
     else reloadEnrollments();
   }
 
+  // 수강 종료 모달 열기
+  function openEndModal(e: Enrollment) {
+    setEndingEnrollment(e);
+    setEndDate(new Date().toISOString().split('T')[0]);
+    setEndReason('self_request');
+    setEndMemo('');
+    setEndModalOpen(true);
+  }
+
+  // 수강 종료 처리
+  async function handleEndEnrollment() {
+    if (!endingEnrollment) return;
+    if (!endDate) {
+      alert('종료일을 입력하세요');
+      return;
+    }
+    const courseName = endingEnrollment.courses?.name || '강좌';
+
+    const { error } = await supabase.from('enrollments').update({
+      status: 'ended',
+      end_date: endDate,
+      end_reason: endReason,
+      refund_memo: endMemo.trim() || null,
+      ended_at: new Date().toISOString(),
+    }).eq('id', endingEnrollment.id);
+
+    if (error) {
+      alert('종료 실패: ' + error.message);
+    } else {
+      const reasonLabel = endReason === 'self_request' ? '본인 요청' : '직원 조치';
+      alert(`${courseName} 수강이 ${endDate}자로 종료되었습니다.\n사유: ${reasonLabel}\n\n이전 결제·출석 기록은 그대로 유지됩니다.`);
+      setEndModalOpen(false);
+      setEndingEnrollment(null);
+      reloadEnrollments();
+    }
+  }
+
+  // 수강 재개 모달 열기
+  function openResumeModal(e: Enrollment) {
+    setResumingEnrollment(e);
+    setResumeDate(new Date().toISOString().split('T')[0]);
+    setResumeModalOpen(true);
+  }
+
+  // 수강 재개 처리
+  async function handleResumeEnrollment() {
+    if (!resumingEnrollment) return;
+    const courseName = resumingEnrollment.courses?.name || '강좌';
+
+    // 신청일(enrolled_at)은 원래 값 유지
+    const { error } = await supabase.from('enrollments').update({
+      status: 'active',
+      end_date: null,
+      end_reason: null,
+      refund_memo: null,
+      ended_at: null,
+    }).eq('id', resumingEnrollment.id);
+
+    if (error) {
+      alert('재개 실패: ' + error.message);
+    } else {
+      alert(`${courseName} 수강이 ${resumeDate}자로 재개되었습니다.\n이전 결제·출석 기록은 그대로 유지됩니다.`);
+      setResumeModalOpen(false);
+      setResumingEnrollment(null);
+      reloadEnrollments();
+    }
+  }
+
   async function handleDeleteEnrollment(e: Enrollment) {
-    if (!confirm(`${e.courses?.name} 수강 정보를 완전히 삭제하시겠습니까?`)) return;
+    if (!confirm(`${e.courses?.name} 수강 신청을 취소(완전 삭제)하시겠습니까?\n\n결제·출석 기록도 함께 삭제됩니다.\n수강 종료(기록 보존)는 [수강 종료] 버튼을 사용하세요.`)) return;
     const { error } = await supabase.from('enrollments').delete().eq('id', e.id);
     if (error) alert('삭제 실패: ' + error.message);
     else reloadEnrollments();
@@ -602,18 +671,12 @@ export default function MemberDetailClient({
                   <td style={tdStyle}>{e.enrolled_at?.substring(0, 10)}</td>
                   <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                     {e.status === 'active' && (
-                      <>
-                        <button onClick={() => handleChangeEnrollmentStatus(e, 'paused')} style={smallBtnStyle}>일시중지</button>
-                        <button onClick={() => handleChangeEnrollmentStatus(e, 'ended')} style={smallBtnStyle}>수강종료</button>
-                      </>
-                    )}
-                    {e.status === 'paused' && (
-                      <button onClick={() => handleChangeEnrollmentStatus(e, 'active')} style={smallBtnStyle}>재개</button>
+                      <button onClick={() => openEndModal(e)} style={smallBtnStyle}>📅 수강 종료</button>
                     )}
                     {e.status === 'waiting' && (
-                      <button onClick={() => handleChangeEnrollmentStatus(e, 'active')} style={smallBtnStyle}>수강전환</button>
+                      <button onClick={() => handleChangeEnrollmentStatus(e, 'active')} style={smallBtnStyle}>수강 전환</button>
                     )}
-                    <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
+                    <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>수강신청 취소</button>
                   </td>
                 </tr>
               ))}
@@ -648,18 +711,17 @@ export default function MemberDetailClient({
                     </td>
                     <td style={tdStyle}>
                       {(() => {
-                        const reasonLabel = e.end_reason === 'refund' ? '환불'
-                          : e.end_reason === 'unregistered' ? '미등록(종료)'
-                          : e.end_reason === 'other' ? '이월/기타' : null;
-                        const dateStr = e.end_date || e.refund_date || (e.ended_at ? e.ended_at.substring(0, 10) : null);
+                        const reasonLabel = e.end_reason === 'self_request' ? '본인 요청'
+                          : e.end_reason === 'staff_action' ? '직원 조치' : null;
+                        const dateStr = e.end_date || (e.ended_at ? e.ended_at.substring(0, 10) : null);
                         return (
                           <span style={{ fontSize: 12 }}>
                             {dateStr || '-'}
                             {reasonLabel && (
                               <span style={{
                                 marginLeft: 6, padding: '1px 6px', borderRadius: 4, fontSize: 11,
-                                background: e.end_reason === 'refund' ? '#FCEBEB' : '#f0f0f0',
-                                color: e.end_reason === 'refund' ? '#A32D2D' : '#666',
+                                background: e.end_reason === 'staff_action' ? '#FCEBEB' : '#E6F1FB',
+                                color: e.end_reason === 'staff_action' ? '#A32D2D' : '#042C53',
                               }}>{reasonLabel}</span>
                             )}
                             {e.refund_memo && (
@@ -671,6 +733,9 @@ export default function MemberDetailClient({
                     </td>
                     <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                       <button onClick={() => handleChangeEnrollmentStatus(e, 'active')} style={smallBtnStyle}>재신청</button>
+                      <button onClick={() => openResumeModal(e)} style={{
+                        ...smallBtnStyle, background: '#1D9E75', color: 'white', borderColor: '#1D9E75',
+                      }}>↻ 수강 재개</button>
                       <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
                     </td>
                   </tr>
@@ -731,6 +796,114 @@ export default function MemberDetailClient({
           </div>
         )}
       </div>
+
+      {/* ============================================ */}
+      {/* 수강 종료 모달                                 */}
+      {/* ============================================ */}
+      {endModalOpen && endingEnrollment && (
+        <div style={modalOverlayStyle}>
+          <div style={modalContentStyle}>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>🛑 수강 종료</h2>
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+              <strong>{member.name}</strong> · {endingEnrollment.courses?.name}
+            </p>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>종료일</label>
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={inputStyle} />
+              <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
+                이 날짜까지는 출석 가능, 다음날부터 차단됩니다. 이전 결제·출석 기록은 그대로 유지됩니다.
+              </p>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>종료 사유</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {(['self_request', 'staff_action'] as const).map(r => (
+                  <label key={r} style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: 10, border: '1px solid ' + (endReason === r ? '#185FA5' : '#ddd'),
+                    background: endReason === r ? '#E6F1FB' : 'white',
+                    borderRadius: 6, cursor: 'pointer',
+                  }}>
+                    <input type="radio" checked={endReason === r} onChange={() => setEndReason(r)} />
+                    <div>
+                      <strong style={{ fontSize: 13 }}>
+                        {r === 'self_request' ? '본인 요청' : '직원 조치'}
+                      </strong>
+                      <p style={{ fontSize: 11, color: '#888', margin: '2px 0 0' }}>
+                        {r === 'self_request' ? '회원이 직접 수강 중단을 요청한 경우' : '정원 초과 정리, 단기강좌 종료, 장기 미납 등'}
+                      </p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>메모 (선택)</label>
+              <input value={endMemo} onChange={(e) => setEndMemo(e.target.value)} style={inputStyle} placeholder="예: 이사, 건강 문제 등" />
+            </div>
+
+            <div style={{
+              background: '#FFF8E1', border: '1px solid #FFE082',
+              padding: 10, borderRadius: 6, fontSize: 11, color: '#5D4037', marginBottom: 16,
+            }}>
+              💡 수강료 환불·이월은 별도 절차입니다. 수납관리에서 처리하세요.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleEndEnrollment} style={{
+                flex: 1, padding: '12px',
+                background: '#A32D2D', color: 'white',
+                border: 'none', borderRadius: 6, cursor: 'pointer',
+                fontSize: 14, fontWeight: 500,
+              }}>🛑 수강 종료 처리</button>
+              <button onClick={() => { setEndModalOpen(false); setEndingEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================ */}
+      {/* 수강 재개 모달                                 */}
+      {/* ============================================ */}
+      {resumeModalOpen && resumingEnrollment && (
+        <div style={modalOverlayStyle}>
+          <div style={modalContentStyle}>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>↻ 수강 재개</h2>
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+              <strong>{member.name}</strong> · {resumingEnrollment.courses?.name}
+            </p>
+
+            <div style={{
+              background: '#E6F1FB', border: '1px solid #B5D4F4',
+              padding: 12, borderRadius: 6, fontSize: 12, color: '#042C53', marginBottom: 16,
+            }}>
+              이 회원은 수강 종료된 상태입니다. 재개하면 다시 수강중 상태가 되며,
+              <strong> 이전 결제·출석 기록은 그대로 유지</strong>됩니다.
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>재개일 (다시 다니기 시작하는 날)</label>
+              <input type="date" value={resumeDate} onChange={(e) => setResumeDate(e.target.value)} style={inputStyle} />
+              <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
+                이 날짜부터 다시 출석체크와 수납이 가능해집니다. 수강료는 해당 월 셀을 클릭하여 별도로 결제 처리하세요.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleResumeEnrollment} style={{
+                flex: 1, padding: '12px',
+                background: '#1D9E75', color: 'white',
+                border: 'none', borderRadius: 6, cursor: 'pointer',
+                fontSize: 14, fontWeight: 500,
+              }}>↻ 수강 재개</button>
+              <button onClick={() => { setResumeModalOpen(false); setResumingEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -764,6 +937,18 @@ const dangerBtnStyle: React.CSSProperties = {
 const smallBtnStyle: React.CSSProperties = {
   padding: '4px 10px', background: 'white', border: '1px solid #ddd',
   borderRadius: 4, cursor: 'pointer', fontSize: 11, marginRight: 4,
+};
+const modalOverlayStyle: React.CSSProperties = {
+  position: 'fixed', inset: 0,
+  background: 'rgba(0,0,0,0.5)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  zIndex: 1000,
+};
+const modalContentStyle: React.CSSProperties = {
+  background: 'white', borderRadius: 12, padding: 24,
+  maxWidth: 500, width: '90%',
+  maxHeight: '90vh', overflowY: 'auto',
+  boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
 };
 const thStyle: React.CSSProperties = {
   padding: '10px 12px', textAlign: 'left',

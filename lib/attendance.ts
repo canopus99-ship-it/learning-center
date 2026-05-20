@@ -13,13 +13,18 @@
  *
  * @returns { canCheck: boolean, reason: string | null }
  */
+/**
+ * 특정 회원의 특정 수업 날짜에 출석체크 가능한지 확인
+ *
+ * 차단 조건:
+ *   1. 휴강된 수업
+ *   2. 수강 종료된 회원 (enrollment.status === 'ended')
+ *      - end_date 이후 수업도 차단 (종료일 다음날부터)
+ */
 export function canCheckAttendance(
   enrollment: {
     status: string;
     end_date?: string | null;
-    end_from_year: number | null;
-    end_from_month: number | null;
-    refund_date: string | null;
   },
   classDate: string,        // 'YYYY-MM-DD'
   isCancelled: boolean       // 휴강 여부
@@ -29,37 +34,18 @@ export function canCheckAttendance(
     return { canCheck: false, reason: '휴강된 수업입니다' };
   }
 
-  // 2. 즉시 수강종료
+  // 2. 수강 종료
   if (enrollment.status === 'ended') {
-    return { canCheck: false, reason: '수강 종료된 회원입니다' };
-  }
-
-  // 3. 처리일(end_date) 이후 차단 - 날짜 단위로 정확히
-  //    처리일 당일까지는 출석 가능, 다음날부터 차단
-  if (enrollment.end_date) {
-    if (classDate > enrollment.end_date) {
-      return { canCheck: false, reason: `처리일(${enrollment.end_date}) 이후 수업입니다` };
+    // 종료일이 있고, 수업일이 종료일 당일까지면 출석 가능
+    if (enrollment.end_date && classDate <= enrollment.end_date) {
+      return { canCheck: true, reason: null };
     }
-    return { canCheck: true, reason: null };
-  }
-
-  // (구 버전 호환) 환불일 이후 차단
-  if (enrollment.refund_date) {
-    if (classDate > enrollment.refund_date) {
-      return { canCheck: false, reason: `환불 처리일(${enrollment.refund_date}) 이후 수업입니다` };
-    }
-  }
-
-  // (구 버전 호환) 월 기반 종료 예약 - 다음 달부터 차단
-  if (enrollment.end_from_year && enrollment.end_from_month) {
-    const classYear = parseInt(classDate.substring(0, 4), 10);
-    const classMonth = parseInt(classDate.substring(5, 7), 10);
-    if (classYear > enrollment.end_from_year) {
-      return { canCheck: false, reason: `${enrollment.end_from_year}.${enrollment.end_from_month}월 이후 수강 종료된 회원입니다` };
-    }
-    if (classYear === enrollment.end_from_year && classMonth > enrollment.end_from_month) {
-      return { canCheck: false, reason: `${enrollment.end_from_year}.${enrollment.end_from_month}월 이후 수강 종료된 회원입니다` };
-    }
+    return {
+      canCheck: false,
+      reason: enrollment.end_date
+        ? `종료일(${enrollment.end_date}) 이후 수업입니다`
+        : '수강 종료된 회원입니다',
+    };
   }
 
   return { canCheck: true, reason: null };

@@ -143,11 +143,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const [receiptNum, setReceiptNum] = useState('');
   const [payMemo, setPayMemo] = useState('');
 
-  // 수납/환불/이월 모달
+  // 수강 종료 모달
   const [endScheduleModalOpen, setEndScheduleModalOpen] = useState(false);
   const [endingEnrollment, setEndingEnrollment] = useState<Enrollment | null>(null);
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
-  const [endReason, setEndReason] = useState<EndReason>('unregistered');
+  const [endReason, setEndReason] = useState<EndReason>('self_request');
   const [endMemo, setEndMemo] = useState('');
 
   // 재등록 모달
@@ -585,7 +585,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   function openEndScheduleModal(enrollment: Enrollment) {
     setEndingEnrollment(enrollment);
     setEndDate(new Date().toISOString().split('T')[0]);
-    setEndReason('unregistered');
+    setEndReason('self_request');
     setEndMemo('');
     setEndScheduleModalOpen(true);
   }
@@ -593,37 +593,26 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   async function handleEndSchedule() {
     if (!endingEnrollment) return;
     if (!endDate) {
-      alert('처리일을 입력하세요');
+      alert('종료일을 입력하세요');
       return;
     }
     const memberName = endingEnrollment.members?.name || '회원';
     const courseName = courses.find(c => c.id === endingEnrollment.course_id)?.name || '강좌';
 
-    const endYear = parseInt(endDate.substring(0, 4), 10);
-    const endMonth = parseInt(endDate.substring(5, 7), 10);
-
-    const updates: any = {
+    // 수강 상태를 'ended'로 변경. 이전 결제/출석 기록은 보존됨.
+    const { error } = await supabase.from('enrollments').update({
+      status: 'ended',
       end_date: endDate,
-      end_from_year: endYear,
-      end_from_month: endMonth,
       end_reason: endReason,
-    };
-
-    if (endReason === 'refund') {
-      updates.refund_date = endDate;
-      updates.refund_memo = endMemo.trim() || null;
-    } else {
-      updates.refund_date = null;
-      updates.refund_memo = endMemo.trim() || null;
-    }
-
-    const { error } = await supabase.from('enrollments').update(updates).eq('id', endingEnrollment.id);
+      refund_memo: endMemo.trim() || null,
+      ended_at: new Date().toISOString(),
+    }).eq('id', endingEnrollment.id);
 
     if (error) {
-      alert('처리 실패: ' + error.message);
+      alert('종료 처리 실패: ' + error.message);
     } else {
-      const reasonLabel = endReason === 'refund' ? '환불' : endReason === 'unregistered' ? '미등록(종료)' : '이월/기타';
-      alert(`${memberName}님 / ${courseName}\n${endDate}자로 ${reasonLabel} 처리되었습니다.\n이 날짜 이후 출석체크가 차단됩니다.`);
+      const reasonLabel = endReason === 'self_request' ? '본인 요청' : '직원 조치';
+      alert(`${memberName}님 / ${courseName}\n${endDate}자로 수강 종료되었습니다.\n사유: ${reasonLabel}\n\n이전 결제·출석 기록은 그대로 유지됩니다.`);
       setEndScheduleModalOpen(false);
       setEndingEnrollment(null);
       loadData();
@@ -666,21 +655,22 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     // 종료 관련 정보 모두 해제 + 다시 수강중으로
     // (이전 출석/결제 기록은 그대로 유지됨)
     // 신청일(enrolled_at)은 원래 값 유지 - 처음 이 강좌를 신청한 날이 중요
+    // 이전 결제·출석 기록은 보존됨
     const { error } = await supabase.from('enrollments').update({
       status: 'active',
       end_date: null,
+      end_reason: null,
+      ended_at: null,
+      refund_memo: null,
       end_from_year: null,
       end_from_month: null,
-      end_reason: null,
       refund_date: null,
-      refund_memo: null,
-      ended_at: null,
     }).eq('id', reEnrollEnrollment.id);
 
     if (error) {
       alert('재등록 실패: ' + error.message);
     } else {
-      alert(`${memberName}님 / ${courseName}\n${reEnrollDate}자로 재등록되었습니다.\n이전 출석 기록은 그대로 유지됩니다.`);
+      alert(`${memberName}님 / ${courseName}\n${reEnrollDate}자로 수강 재개되었습니다.\n이전 결제·출석 기록은 그대로 유지됩니다.`);
       setReEnrollModalOpen(false);
       setReEnrollEnrollment(null);
       loadData();
@@ -997,8 +987,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                           const isAnnualChecked = selectedAnnualCourses.has(course.id);
                           const annualAmount = calculateAnnualFee(calc.amount);
 
-                          // 종료 예약 정보
-                          const hasEndSchedule = !!((enrollment as any).end_date) || !!(enrollment.end_from_year && enrollment.end_from_month);
+                          // 수강 종료 여부
+                          const isCourseEnded = enrollment.status === 'ended';
 
                           return (
                             <div key={enrollment.id} style={{
@@ -1015,20 +1005,25 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   <span style={{ fontSize: 12, color: '#888' }}>
                                     월 <strong>{calc.amount.toLocaleString()}원</strong>
                                   </span>
-                                  {hasEndSchedule && (
-                                    <span style={{ ...badgeStyle('#7B3FBF'), fontSize: 11 }}>
-                                      📅 {(enrollment as any).end_date || (enrollment.end_from_year + '.' + enrollment.end_from_month)} {enrollment.end_reason === 'refund' ? '환불' : enrollment.end_reason === 'unregistered' ? '종료' : '이월/기타'}
+                                  {isCourseEnded ? (
+                                    <span style={{ ...badgeStyle('#A32D2D'), fontSize: 11 }}>
+                                      🛑 수강종료 {(enrollment as any).end_date || ''}
+                                    </span>
+                                  ) : (
+                                    <span style={{ ...badgeStyle('#1D9E75'), fontSize: 11 }}>
+                                      ✓ 수강중
                                     </span>
                                   )}
                                 </div>
                                 <div style={{ display: 'flex', gap: 4 }}>
-                                  {hasEndSchedule ? (
-                                    <button onClick={() => cancelEndSchedule(enrollment)} style={smallBtnStyle}>
-                                      처리 취소
-                                    </button>
+                                  {isCourseEnded ? (
+                                    <button onClick={() => openReEnrollModal(enrollment)} style={{
+                                      ...smallBtnStyle,
+                                      background: '#1D9E75', color: 'white', borderColor: '#1D9E75',
+                                    }}>↻ 수강 재개</button>
                                   ) : (
                                     <button onClick={() => openEndScheduleModal(enrollment)} style={smallBtnStyle}>
-                                      종료 / 환불 / 이월
+                                      📅 수강 종료
                                     </button>
                                   )}
                                 </div>
@@ -1370,7 +1365,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                             const member = e.members;
                             if (!member) return null;
                             const p = getPayment(e.id, selectedMonth);
-                            const isEnded = isEndedAtMonth(e, selectedYear, selectedMonth);
+                            const isEnded = e.status === 'ended';
 
                             if (isEnded) {
                               return (
@@ -1769,23 +1764,23 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       {endScheduleModalOpen && endingEnrollment && (
         <div style={modalOverlayStyle}>
           <div style={modalContentStyle}>
-            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>종료 / 환불 / 이월 처리</h2>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>🛑 수강 종료</h2>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
               <strong>{endingEnrollment.members?.name}</strong> · {courses.find(c => c.id === endingEnrollment.course_id)?.name}
             </p>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>처리일 (회원이 환불/이월 의사를 밝힌 날)</label>
+              <label style={labelStyle}>종료일</label>
               <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={inputStyle} />
               <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
-                이 날짜 다음날부터 출석체크가 차단되며, 해당 월 이후 수납 화면에서도 제외됩니다.
+                이 날짜까지는 출석 가능, 다음날부터 차단됩니다. 이전 결제·출석 기록은 그대로 유지됩니다.
               </p>
             </div>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>처리 구분</label>
+              <label style={labelStyle}>종료 사유</label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {(['unregistered', 'refund', 'other'] as EndReason[]).map(r => (
+                {(['self_request', 'staff_action'] as EndReason[]).map(r => (
                   <label key={r} style={{
                     display: 'flex', alignItems: 'center', gap: 10,
                     padding: 10, border: '1px solid ' + (endReason === r ? '#185FA5' : '#ddd'),
@@ -1795,10 +1790,10 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                     <input type="radio" checked={endReason === r} onChange={() => setEndReason(r)} />
                     <div>
                       <strong style={{ fontSize: 13 }}>
-                        {r === 'unregistered' ? '미등록 (자연 종료)' : r === 'refund' ? '환불' : '이월 / 기타'}
+                        {r === 'self_request' ? '본인 요청' : '직원 조치'}
                       </strong>
                       <p style={{ fontSize: 11, color: '#888', margin: '2px 0 0' }}>
-                        {r === 'unregistered' ? '다음 달부터 수강을 안 하는 경우' : r === 'refund' ? '환불 신청서를 작성한 경우' : '이월 또는 그 밖의 사유'}
+                        {r === 'self_request' ? '회원이 직접 수강 중단을 요청한 경우' : '정원 초과 정리, 단기강좌 종료, 장기 미납 등'}
                       </p>
                     </div>
                   </label>
@@ -1808,16 +1803,23 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
             <div style={{ marginBottom: 16 }}>
               <label style={labelStyle}>메모 (선택)</label>
-              <input value={endMemo} onChange={(e) => setEndMemo(e.target.value)} style={inputStyle} placeholder="예: 입원으로 환불 신청, 5월분 6월로 이월 등" />
+              <input value={endMemo} onChange={(e) => setEndMemo(e.target.value)} style={inputStyle} placeholder="예: 이사, 건강 문제, 대기자 정리 등" />
+            </div>
+
+            <div style={{
+              background: '#FFF8E1', border: '1px solid #FFE082',
+              padding: 10, borderRadius: 6, fontSize: 11, color: '#5D4037', marginBottom: 16,
+            }}>
+              💡 <strong>안내</strong>: 수강료 환불·이월은 별도 절차입니다. 셀을 선택해 [↩️ 환불]·[📦 이월] 버튼으로 처리하세요.
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
               <button onClick={handleEndSchedule} style={{
                 flex: 1, padding: '12px',
-                background: '#185FA5', color: 'white',
+                background: '#A32D2D', color: 'white',
                 border: 'none', borderRadius: 6, cursor: 'pointer',
                 fontSize: 14, fontWeight: 500,
-              }}>확인</button>
+              }}>🛑 수강 종료 처리</button>
               <button onClick={() => { setEndScheduleModalOpen(false); setEndingEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
             </div>
           </div>
@@ -1977,7 +1979,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       {reEnrollModalOpen && reEnrollEnrollment && (
         <div style={modalOverlayStyle}>
           <div style={modalContentStyle}>
-            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>재등록 처리</h2>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>↻ 수강 재개</h2>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
               <strong>{reEnrollEnrollment.members?.name}</strong> · {courses.find(c => c.id === reEnrollEnrollment.course_id)?.name}
             </p>
@@ -1986,12 +1988,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
               background: '#E6F1FB', border: '1px solid #B5D4F4',
               padding: 12, borderRadius: 6, fontSize: 12, color: '#042C53', marginBottom: 16,
             }}>
-              이 회원은 환불/종료 처리된 상태입니다. 재등록하면 다시 수강중 상태가 되며,
+              이 회원은 수강 종료된 상태입니다. 재개하면 다시 수강중 상태가 되며,
               <strong> 이전 출석·결제 기록은 그대로 유지</strong>됩니다.
             </div>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>재등록일 (다시 다니기 시작하는 날)</label>
+              <label style={labelStyle}>재개일 (다시 다니기 시작하는 날)</label>
               <input type="date" value={reEnrollDate} onChange={(e) => setReEnrollDate(e.target.value)} style={inputStyle} />
               <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
                 이 날짜부터 다시 출석체크와 수납이 가능해집니다. 수강료는 해당 월 셀을 클릭하여 별도로 결제 처리하세요.
@@ -2004,7 +2006,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                 background: '#1D9E75', color: 'white',
                 border: 'none', borderRadius: 6, cursor: 'pointer',
                 fontSize: 14, fontWeight: 500,
-              }}>재등록</button>
+              }}>↻ 수강 재개</button>
               <button onClick={() => { setReEnrollModalOpen(false); setReEnrollEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
             </div>
           </div>

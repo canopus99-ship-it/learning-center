@@ -3,7 +3,7 @@
  */
 
 export type PaymentMethod = 'cash' | 'card' | 'transfer' | 'zeropay';
-export type EndReason = 'unregistered' | 'refund' | 'other';
+export type EndReason = 'self_request' | 'staff_action';
 export type DiscountType = 'discount_50' | 'discount_100' | null;
 
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
@@ -14,15 +14,13 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
 };
 
 export const END_REASON_LABELS: Record<EndReason, string> = {
-  unregistered: '미등록',
-  refund: '환불',
-  other: '기타',
+  self_request: '본인 요청',
+  staff_action: '직원 조치',
 };
 
 export const END_REASON_COLORS: Record<EndReason, string> = {
-  unregistered: '#888888',
-  refund: '#A32D2D',
-  other: '#666666',
+  self_request: '#185FA5',
+  staff_action: '#A32D2D',
 };
 
 /**
@@ -122,44 +120,24 @@ export function isAfterRefund(date: string, refundDate: string | null): boolean 
  *   2. end_from_year/month 있고 그 월 이상 → 종료
  *   3. refund_date 있고 그 월 1일 이후 → 종료 (환불)
  */
+/**
+ * 특정 월에 수강 종료된 상태인지 판정
+ *
+ * 단순화된 기준:
+ * - enrollment.status === 'ended' → 모든 월이 종료
+ * - 그 외 → 종료 아님 (환불/이월은 별개 축으로 판정)
+ *
+ * 환불/이월은 payments 테이블의 status_type으로 관리되며,
+ * "다음 달부터 미등록" 처리는 수납 화면에서 별도로 판정함.
+ */
 export function isEndedAtMonth(
   enrollment: {
     status: string;
-    end_date?: string | null;
-    end_from_year: number | null;
-    end_from_month: number | null;
-    refund_date: string | null;
   },
-  year: number,
-  month: number
+  _year: number,
+  _month: number
 ): boolean {
-  // 즉시 종료
-  if (enrollment.status === 'ended') return true;
-
-  // 날짜 기반 처리 (end_date 우선)
-  // end_date가 속한 달의 "다음 달"부터 수납 화면에서 종료 표시
-  // (end_date 당월까지는 이미 낸 수강료가 있을 수 있으므로 유지)
-  if (enrollment.end_date) {
-    const endYear = parseInt(enrollment.end_date.substring(0, 4), 10);
-    const endMonth = parseInt(enrollment.end_date.substring(5, 7), 10);
-    if (year > endYear) return true;
-    if (year === endYear && month > endMonth) return true;
-    return false;
-  }
-
-  // (구 버전 호환) 월 기반 종료 예약
-  if (enrollment.end_from_year && enrollment.end_from_month) {
-    if (year > enrollment.end_from_year) return true;
-    if (year === enrollment.end_from_year && month > enrollment.end_from_month) return true;
-  }
-
-  // (구 버전 호환) 환불일이 그 달보다 이전이면 종료
-  if (enrollment.refund_date) {
-    const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
-    if (enrollment.refund_date < monthStart) return true;
-  }
-
-  return false;
+  return enrollment.status === 'ended';
 }
 
 /**
