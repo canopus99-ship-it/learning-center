@@ -123,21 +123,35 @@ export function isAfterRefund(date: string, refundDate: string | null): boolean 
 /**
  * 특정 월에 수강 종료된 상태인지 판정
  *
- * 단순화된 기준:
- * - enrollment.status === 'ended' → 모든 월이 종료
- * - 그 외 → 종료 아님 (환불/이월은 별개 축으로 판정)
+ * 기준:
+ * - status === 'ended' AND end_date 이전 월은 false (이전 기록 보존)
+ * - status === 'ended' AND end_date 당월부터 true (수강종료 표시)
+ * - end_date가 없으면 모든 월이 종료 (구버전 호환)
  *
- * 환불/이월은 payments 테이블의 status_type으로 관리되며,
- * "다음 달부터 미등록" 처리는 수납 화면에서 별도로 판정함.
+ * 예: 5월 18일에 종료 처리 → 1~4월은 원래 상태 유지, 5월부터 수강종료
+ *
+ * 환불/이월은 payments 테이블의 status_type으로 관리되며, 별개 축임.
  */
 export function isEndedAtMonth(
   enrollment: {
     status: string;
+    end_date?: string | null;
   },
-  _year: number,
-  _month: number
+  year: number,
+  month: number
 ): boolean {
-  return enrollment.status === 'ended';
+  if (enrollment.status !== 'ended') return false;
+
+  // 종료일 없으면 모든 월 종료 (구버전 호환)
+  if (!enrollment.end_date) return true;
+
+  // 종료일 이전 월은 원래 상태 유지 (그 달은 아직 다녔던 것)
+  const endYear = parseInt(enrollment.end_date.substring(0, 4), 10);
+  const endMonth = parseInt(enrollment.end_date.substring(5, 7), 10);
+
+  if (year < endYear) return false;
+  if (year === endYear && month < endMonth) return false;
+  return true;
 }
 
 /**
