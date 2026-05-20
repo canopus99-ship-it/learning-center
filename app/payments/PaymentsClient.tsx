@@ -1106,14 +1106,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     textColor = '#888';
                                   }
 
-                                  // 종료된 회원의 종료 이전 월: 내용은 그대로 + 회색 톤으로 표시
-                                  // (isEnded는 종료일 이후 월에만 true이므로 여기 분기들과 안 겹침)
-                                  const isEndedMemberBeforeEnd = enrollment.status === 'ended' && !isEnded;
-                                  if (isEndedMemberBeforeEnd) {
-                                    // 셀의 채도를 낮춰 종료 회원임을 표시 (내용은 그대로 살림)
-                                    // bgColor를 옅게 만들기 위해 약간 회색 톤 추가
-                                    // 단, 색이 흰색/연회색 계열이면 그대로 두고 textColor만 옅게
-                                  }
+                                  // 종료된 회원이라도 종료일 이전 월은 원래 상태(등록/미납/환불 등) 그대로 표시
+                                  // (isEnded는 종료일 이후 월에만 true이므로 위 분기들과 충돌 없음)
 
                                   const selectedStyle = isSelected ? {
                                     boxShadow: '0 0 0 3px #185FA5',
@@ -1142,8 +1136,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                         borderRadius: 6,
                                         textAlign: 'center',
                                         cursor: (canSelect && !isAnnualHere) ? 'pointer' : 'default',
-                                        opacity: isAnnualHere ? 0.7 : (isEndedMemberBeforeEnd ? 0.5 : 1),
-                                        filter: isEndedMemberBeforeEnd ? 'grayscale(50%)' : 'none',
+                                        opacity: isAnnualHere ? 0.7 : 1,
                                         ...selectedStyle,
                                       }}
                                     >
@@ -1382,22 +1375,10 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                             const member = e.members;
                             if (!member) return null;
                             const p = getPayment(e.id, selectedMonth);
-                            const isEnded = e.status === 'ended';
 
-                            if (isEnded) {
-                              return (
-                                <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0', opacity: 0.5 }}>
-                                  <td style={tdStyle}>
-                                    <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{member.name}</Link>
-                                  </td>
-                                  <td colSpan={7} style={{ ...tdStyle, color: '#3F3F3F', fontSize: 12 }}>
-                                    수강종료
-                                    {e.end_from_year && e.end_from_month && ` (${e.end_from_year}.${e.end_from_month}월부터)`}
-                                    {e.refund_date && ` · 환불: ${e.refund_date}`}
-                                  </td>
-                                </tr>
-                              );
-                            }
+                            // 종료된 회원이라도 여기 도달했다면 종료일 이전 월이므로
+                            // 정상적으로 결제 정보를 표시함
+                            // (getEnrollmentsByCourse에서 종료일 이후 월은 이미 제외됨)
 
                             const calc = calculateFee(course.fee_jung_gu, course.fee_other, member.is_jung_gu, member.is_discount_50, member.is_discount_100, course.is_free);
                             const isAutoComplete = calc.amount === 0;
