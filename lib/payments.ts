@@ -13,14 +13,23 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   zeropay: '제로페이',
 };
 
-export const END_REASON_LABELS: Record<EndReason, string> = {
+// 옛 DB 값('unregistered', 'refund', 'other')도 호환되도록 string 키 허용
+export const END_REASON_LABELS: Record<string, string> = {
   self_request: '본인 요청',
   staff_action: '직원 조치',
+  // 옛 값 호환
+  unregistered: '미등록(자연 종료)',
+  refund: '환불',
+  other: '기타',
 };
 
-export const END_REASON_COLORS: Record<EndReason, string> = {
+export const END_REASON_COLORS: Record<string, string> = {
   self_request: '#185FA5',
   staff_action: '#A32D2D',
+  // 옛 값 호환
+  unregistered: '#888888',
+  refund: '#A32D2D',
+  other: '#666666',
 };
 
 /**

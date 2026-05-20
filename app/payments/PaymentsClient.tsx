@@ -42,7 +42,7 @@ type Enrollment = {
   member_id: number;
   course_id: number;
   status: EnrollmentStatus;
-  end_reason: EndReason | null;
+  end_reason: string | null;
   end_date: string | null;
   end_from_year: number | null;
   end_from_month: number | null;

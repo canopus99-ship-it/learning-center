@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { DAY_LABELS, FREQUENCY_LABELS, generateRegularDates, type SessionConfig } from '@/lib/courseDates';
 import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus } from '@/lib/enrollment';
-import { END_REASON_LABELS, END_REASON_COLORS, type EndReason } from '@/lib/payments';
+import { END_REASON_LABELS, END_REASON_COLORS } from '@/lib/payments';
 
 type Course = {
   id: number; category: string; name: string;
@@ -33,7 +33,7 @@ type Enrollment = {
   status: EnrollmentStatus;
   waiting_order: number | null;
   enrolled_at: string; ended_at: string | null;
-  end_reason: EndReason | null;
+  end_reason: string | null;
   refund_date: string | null;
   refund_memo: string | null;
   memo: string | null;
@@ -121,12 +121,7 @@ export default function CourseDetailClient({
   const [searchResults, setSearchResults] = useState<MemberSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
 
-  // 수강종료 모달
-  const [endModalOpen, setEndModalOpen] = useState(false);
-  const [endingEnrollment, setEndingEnrollment] = useState<Enrollment | null>(null);
-  const [endReason, setEndReason] = useState<EndReason>('unregistered');
-  const [refundDate, setRefundDate] = useState(new Date().toISOString().split('T')[0]);
-  const [refundMemo, setRefundMemo] = useState('');
+  // (수강 종료 관련 state 제거됨 - 수강 종료는 수납관리 또는 회원관리에서 처리)
 
   const instructorMap = new Map(instructors.map(i => [i.id, i.name]));
   const activeInstructors = instructors.filter(i => i.is_active || i.id === course.instructor_id);
@@ -371,32 +366,18 @@ export default function CourseDetailClient({
   async function handleChangeStatus(e: Enrollment, newStatus: EnrollmentStatus) {
     const memberName = e.members?.name || '회원';
 
-    // 수강종료는 모달로 처리
+    // 수강 종료/재개는 수납관리 또는 회원 상세에서 처리하도록 안내
     if (newStatus === 'ended') {
-      setEndingEnrollment(e);
-      setEndReason('unregistered');
-      setRefundDate(new Date().toISOString().split('T')[0]);
-      setRefundMemo('');
-      setEndModalOpen(true);
+      alert(`수강 종료는 수납관리 또는 회원 상세 페이지에서 처리해주세요.\n(처리 후 이 화면에 자동 반영됩니다.)`);
       return;
     }
 
     if (!confirm(`${memberName}님을 "${STATUS_LABELS[newStatus]}" 상태로 변경하시겠습니까?`)) return;
 
     const updates: any = { status: newStatus };
-    if (newStatus === 'paused') {
-      updates.pause_start = new Date().toISOString();
+    if (newStatus === 'active') {
       updates.waiting_order = null;
-    } else if (newStatus === 'active') {
-      updates.waiting_order = null;
-      if (e.status === 'paused') updates.pause_end = new Date().toISOString();
-      if (e.status === 'ended') {
-        updates.ended_at = null;
-        updates.enrolled_at = new Date().toISOString();
-        updates.end_reason = null;
-        updates.refund_date = null;
-        updates.refund_memo = null;
-      }
+      // 대기 → 수강중 전환 등 정상 케이스
     } else if (newStatus === 'waiting') {
       updates.waiting_order = waitingList.length + 1;
     }
@@ -404,42 +385,6 @@ export default function CourseDetailClient({
     const { error } = await supabase.from('enrollments').update(updates).eq('id', e.id);
     if (error) alert('변경 실패: ' + error.message);
     else reloadEnrollments();
-  }
-
-  // 수강종료 모달 - 저장
-  async function handleConfirmEnd() {
-    if (!endingEnrollment) return;
-    const memberName = endingEnrollment.members?.name || '회원';
-
-    const updates: any = {
-      status: 'ended',
-      ended_at: new Date().toISOString(),
-      waiting_order: null,
-      end_reason: endReason,
-    };
-
-    if (endReason === 'refund') {
-      if (!refundDate) {
-        alert('환불 처리일을 입력하세요');
-        return;
-      }
-      updates.refund_date = refundDate;
-      updates.refund_memo = refundMemo.trim() || null;
-    } else {
-      updates.refund_date = null;
-      updates.refund_memo = null;
-    }
-
-    const { error } = await supabase.from('enrollments').update(updates).eq('id', endingEnrollment.id);
-
-    if (error) {
-      alert('처리 실패: ' + error.message);
-    } else {
-      alert(`${memberName}님의 수강이 종료되었습니다.\n사유: ${END_REASON_LABELS[endReason]}${endReason === 'refund' ? `\n환불 처리일: ${refundDate}` : ''}`);
-      setEndModalOpen(false);
-      setEndingEnrollment(null);
-      reloadEnrollments();
-    }
   }
 
   async function handleMoveWaitingOrder(e: Enrollment, direction: 'up' | 'down') {
@@ -828,14 +773,7 @@ export default function CourseDetailClient({
                   <td style={tdStyle}><span style={badgeStyle(STATUS_COLORS[e.status])}>{STATUS_LABELS[e.status]}</span></td>
                   <td style={tdStyle}>{e.enrolled_at?.substring(0, 10)}</td>
                   <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                    {e.status === 'active' && (
-                      <>
-                        <button onClick={() => handleChangeStatus(e, 'paused')} style={smallBtnStyle}>일시중지</button>
-                        <button onClick={() => handleChangeStatus(e, 'ended')} style={smallBtnStyle}>수강종료</button>
-                      </>
-                    )}
-                    {e.status === 'paused' && (<button onClick={() => handleChangeStatus(e, 'active')} style={smallBtnStyle}>재개</button>)}
-                    <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
+                    <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>수강신청 취소</button>
                   </td>
                 </tr>
               ))}
@@ -899,8 +837,8 @@ export default function CourseDetailClient({
                     </td>
                     <td style={tdStyle}>
                       {e.end_reason ? (
-                        <span style={badgeStyle(END_REASON_COLORS[e.end_reason])}>
-                          {END_REASON_LABELS[e.end_reason]}
+                        <span style={badgeStyle((END_REASON_COLORS as any)[e.end_reason] || '#888')}>
+                          {(END_REASON_LABELS as any)[e.end_reason] || e.end_reason}
                         </span>
                       ) : '-'}
                     </td>
@@ -939,91 +877,7 @@ export default function CourseDetailClient({
         </div>
       </Link>
 
-      {/* 수강종료 모달 */}
-      {endModalOpen && endingEnrollment && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 100, padding: 20,
-        }}>
-          <div style={{
-            background: 'white', borderRadius: 12, padding: 24,
-            maxWidth: 500, width: '100%',
-          }}>
-            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>수강 종료 처리</h2>
-            <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
-              <strong>{endingEnrollment.members?.name}</strong>님의 수강을 종료합니다.
-            </p>
-
-            <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>종료 사유 *</label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {(['unregistered', 'refund', 'other'] as EndReason[]).map(r => (
-                  <label key={r} style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: 10, border: '1px solid ' + (endReason === r ? '#185FA5' : '#ddd'),
-                    background: endReason === r ? '#E6F1FB' : 'white',
-                    borderRadius: 6, cursor: 'pointer',
-                  }}>
-                    <input
-                      type="radio"
-                      checked={endReason === r}
-                      onChange={() => setEndReason(r)}
-                    />
-                    <div>
-                      <strong style={{ fontSize: 14 }}>{END_REASON_LABELS[r]}</strong>
-                      <p style={{ fontSize: 11, color: '#888', margin: '2px 0 0' }}>
-                        {r === 'unregistered' && '다음 달 등록을 안 하셨거나 자연 종료'}
-                        {r === 'refund' && '회원이 환불 신청서를 작성하여 환불 처리'}
-                        {r === 'other' && '위 사유에 해당하지 않는 경우'}
-                      </p>
-                    </div>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {endReason === 'refund' && (
-              <div style={{
-                background: '#FCEBEB', border: '1px solid #F09595',
-                padding: 16, borderRadius: 6, marginBottom: 16,
-              }}>
-                <div style={{ marginBottom: 12 }}>
-                  <label style={labelStyle}>환불 처리일 *</label>
-                  <input type="date" value={refundDate} onChange={(e) => setRefundDate(e.target.value)} style={inputStyle} />
-                  <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
-                    회원이 환불 의사를 밝힌 날을 입력하세요. 이 날짜 이후부터 출석체크가 차단됩니다.
-                  </p>
-                </div>
-                <div>
-                  <label style={labelStyle}>환불 메모 (선택)</label>
-                  <input
-                    value={refundMemo}
-                    onChange={(e) => setRefundMemo(e.target.value)}
-                    style={inputStyle}
-                    placeholder="예: 입원으로 환불 신청"
-                  />
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={handleConfirmEnd} style={{
-                flex: 1, padding: '12px',
-                background: '#185FA5', color: 'white',
-                border: 'none', borderRadius: 6, cursor: 'pointer',
-                fontSize: 14, fontWeight: 500,
-              }}>확인</button>
-              <button onClick={() => { setEndModalOpen(false); setEndingEnrollment(null); }} style={{
-                padding: '12px 24px',
-                background: 'white', color: '#666',
-                border: '1px solid #ddd', borderRadius: 6, cursor: 'pointer',
-                fontSize: 13,
-              }}>취소</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 수강 종료/재개는 수납관리 또는 회원 상세 페이지에서 처리합니다. */}
     </div>
   );
 }
