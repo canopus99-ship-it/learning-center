@@ -197,8 +197,15 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   }
 
   function getEnrollmentsByCourse(courseId: number): Enrollment[] {
+    // 종료된 회원도 종료일 이전 월에는 보여줘야 함.
+    // isEndedAtMonth(e, year, month)가 false면 그 월에는 아직 수강중이었음.
     return enrollments
-      .filter(e => e.course_id === courseId && e.status !== 'ended')
+      .filter(e => {
+        if (e.course_id !== courseId) return false;
+        // 선택된 월에 종료된 상태면 제외 (종료일 이후 월에서만 사라짐)
+        if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
+        return true;
+      })
       .sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || ''));
   }
 
