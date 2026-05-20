@@ -1106,6 +1106,15 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     textColor = '#888';
                                   }
 
+                                  // 종료된 회원의 종료 이전 월: 내용은 그대로 + 회색 톤으로 표시
+                                  // (isEnded는 종료일 이후 월에만 true이므로 여기 분기들과 안 겹침)
+                                  const isEndedMemberBeforeEnd = enrollment.status === 'ended' && !isEnded;
+                                  if (isEndedMemberBeforeEnd) {
+                                    // 셀의 채도를 낮춰 종료 회원임을 표시 (내용은 그대로 살림)
+                                    // bgColor를 옅게 만들기 위해 약간 회색 톤 추가
+                                    // 단, 색이 흰색/연회색 계열이면 그대로 두고 textColor만 옅게
+                                  }
+
                                   const selectedStyle = isSelected ? {
                                     boxShadow: '0 0 0 3px #185FA5',
                                   } : {};
@@ -1133,7 +1142,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                         borderRadius: 6,
                                         textAlign: 'center',
                                         cursor: (canSelect && !isAnnualHere) ? 'pointer' : 'default',
-                                        opacity: isAnnualHere ? 0.7 : 1,
+                                        opacity: isAnnualHere ? 0.7 : (isEndedMemberBeforeEnd ? 0.5 : 1),
+                                        filter: isEndedMemberBeforeEnd ? 'grayscale(50%)' : 'none',
                                         ...selectedStyle,
                                       }}
                                     >

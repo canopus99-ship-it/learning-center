@@ -124,12 +124,21 @@ export function isAfterRefund(date: string, refundDate: string | null): boolean 
 /**
  * 특정 월에 수강 종료된 상태인지 판정
  *
- * 기준:
- * - status === 'ended' AND end_date 이전 월 → false (이전 기록 보존)
- * - status === 'ended' AND end_date 당월부터 → true (수강종료 표시)
- * - end_date가 없으면 모든 월 종료 (구버전 호환)
+ * 종료일의 의미: "안 오기 시작하는 날"
+ *  - 종료일이 6월 1일 → 5월 31일까지 다님, 6월부터 안 옴
+ *  - 종료일이 5월 20일 → 5월 19일까지 다님 (하루라도 들었으면 그 달은 살림)
  *
- * 예: 5월 18일에 종료 처리 → 1~4월은 원래 상태 유지, 5월부터 수강종료
+ * 판정 기준:
+ *  - status !== 'ended' → 종료 아님
+ *  - end_date 없음 → 모든 월 종료 (구버전 호환)
+ *  - 종료일이 그 달 1일인 경우: 그 달부터 안 옴 (true)
+ *  - 종료일이 그 달 2일 이후인 경우: 그 달은 하루라도 들었으니 살림 (false)
+ *  - 종료일이 속한 달의 "다음 달부터" 무조건 true
+ *
+ * 예:
+ *  - 6/1 종료: 5월=false (다 다님), 6월=true (안 옴)
+ *  - 5/20 종료: 5월=false (5/19까지 다님), 6월=true
+ *  - 5/1 종료: 5월=true (5/1부터 안 옴), 4월=false
  *
  * 환불/이월은 payments 테이블의 status_type으로 관리되며 별개 축.
  */
@@ -146,13 +155,24 @@ export function isEndedAtMonth(
   // 종료일 없으면 모든 월 종료 (구버전 호환)
   if (!enrollment.end_date) return true;
 
-  // 종료일 이전 월은 원래 상태 유지 (그 달은 아직 다녔던 것)
   const endYear = parseInt(enrollment.end_date.substring(0, 4), 10);
   const endMonth = parseInt(enrollment.end_date.substring(5, 7), 10);
+  const endDay = parseInt(enrollment.end_date.substring(8, 10), 10);
 
+  // 종료일 이전 연도: 아직 다님
   if (year < endYear) return false;
-  if (year === endYear && month < endMonth) return false;
-  return true;
+  // 종료일 이후 연도: 종료
+  if (year > endYear) return true;
+
+  // 같은 연도일 때
+  // 종료일 이전 달: 다 다님
+  if (month < endMonth) return false;
+  // 종료일 이후 달: 안 옴
+  if (month > endMonth) return true;
+
+  // 같은 달일 때: 1일 종료면 안 옴, 2일 이상이면 하루라도 들었으니 살림
+  if (endDay === 1) return true;
+  return false;
 }
 
 /**
