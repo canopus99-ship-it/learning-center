@@ -18,6 +18,13 @@ type Member = {
   is_jung_gu: boolean;
   is_discount_50: boolean;
   is_discount_100: boolean;
+  discount_recipient: boolean;
+  discount_multi_child: boolean;
+  discount_low_income: boolean;
+  discount_single_parent: boolean;
+  discount_veteran: boolean;
+  discount_disabled: boolean;
+  discount_other: boolean;
   received_date: string | null;
   memo: string;
   created_at: string;
@@ -105,6 +112,14 @@ export default function MemberDetailClient({
   const [isJungGu, setIsJungGu] = useState(member.is_jung_gu);
   const [isDiscount50, setIsDiscount50] = useState(member.is_discount_50);
   const [isDiscount100, setIsDiscount100] = useState(member.is_discount_100);
+  // 감면 사유
+  const [discRecipient, setDiscRecipient] = useState(member.discount_recipient || false);
+  const [discMultiChild, setDiscMultiChild] = useState(member.discount_multi_child || false);
+  const [discLowIncome, setDiscLowIncome] = useState(member.discount_low_income || false);
+  const [discSingleParent, setDiscSingleParent] = useState(member.discount_single_parent || false);
+  const [discVeteran, setDiscVeteran] = useState(member.discount_veteran || false);
+  const [discDisabled, setDiscDisabled] = useState(member.discount_disabled || false);
+  const [discOther, setDiscOther] = useState(member.discount_other || false);
   const [memo, setMemo] = useState(member.memo || '');
 
   // 수강 종료 모달
@@ -203,6 +218,13 @@ export default function MemberDetailClient({
       birth_date: birthDate || null,
       gender, address, region_type: regionType,
       is_jung_gu: isJungGu, is_discount_50: isDiscount50, is_discount_100: isDiscount100,
+      discount_recipient: discRecipient,
+      discount_multi_child: discMultiChild,
+      discount_low_income: discLowIncome,
+      discount_single_parent: discSingleParent,
+      discount_veteran: discVeteran,
+      discount_disabled: discDisabled,
+      discount_other: discOther,
       memo,
     };
 
@@ -221,6 +243,13 @@ export default function MemberDetailClient({
     setName(member.name || ''); setPhone(member.phone || ''); setRrnFront(member.rrn_front || '');
     setAddress(member.address || ''); setIsJungGu(member.is_jung_gu);
     setIsDiscount50(member.is_discount_50); setIsDiscount100(member.is_discount_100);
+    setDiscRecipient(member.discount_recipient || false);
+    setDiscMultiChild(member.discount_multi_child || false);
+    setDiscLowIncome(member.discount_low_income || false);
+    setDiscSingleParent(member.discount_single_parent || false);
+    setDiscVeteran(member.discount_veteran || false);
+    setDiscDisabled(member.discount_disabled || false);
+    setDiscOther(member.discount_other || false);
     setMemo(member.memo || ''); setBirthDate(member.birth_date || '');
     setGender(member.gender || ''); setRegionType(member.region_type || '');
     setEditing(false);
@@ -489,10 +518,17 @@ export default function MemberDetailClient({
             <div style={{ gridColumn: '1 / -1' }}><InfoRow label="거주지" value={member.address} /></div>
             <div style={{ gridColumn: '1 / -1' }}>
               <label style={labelStyle}>서류확인</label>
-              <div style={{ marginTop: 4 }}>
+              <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
                 {member.is_jung_gu && <span style={badgeStyle('#185FA5')}>중구민</span>}
-                {member.is_discount_50 && <span style={badgeStyle('#BA7517')}>감면50%</span>}
                 {member.is_discount_100 && <span style={badgeStyle('#A32D2D')}>감면100%</span>}
+                {member.is_discount_50 && <span style={badgeStyle('#BA7517')}>감면50%</span>}
+                {member.discount_recipient && <span style={{ ...badgeStyle('#A32D2D'), opacity: 0.7 }}>수급자</span>}
+                {member.discount_multi_child && <span style={{ ...badgeStyle('#BA7517'), opacity: 0.7 }}>다자녀</span>}
+                {member.discount_low_income && <span style={{ ...badgeStyle('#BA7517'), opacity: 0.7 }}>차상위</span>}
+                {member.discount_single_parent && <span style={{ ...badgeStyle('#BA7517'), opacity: 0.7 }}>한부모</span>}
+                {member.discount_veteran && <span style={{ ...badgeStyle('#BA7517'), opacity: 0.7 }}>국가유공자</span>}
+                {member.discount_disabled && <span style={{ ...badgeStyle('#BA7517'), opacity: 0.7 }}>장애인</span>}
+                {member.discount_other && <span style={{ ...badgeStyle('#BA7517'), opacity: 0.7 }}>기타</span>}
                 {!member.is_jung_gu && !member.is_discount_50 && !member.is_discount_100 && (
                   <span style={{ color: '#888', fontSize: 13 }}>-</span>
                 )}
@@ -545,23 +581,70 @@ export default function MemberDetailClient({
 
             <div style={{ marginBottom: 16 }}>
               <label style={labelStyle}>서류확인</label>
-              <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={isJungGu} onChange={(e) => setIsJungGu(e.target.checked)} />중구민
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={isDiscount50} onChange={(e) => {
-                    setIsDiscount50(e.target.checked);
-                    if (e.target.checked) setIsDiscount100(false);
-                  }} />감면 50%
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={isDiscount100} onChange={(e) => {
-                    setIsDiscount100(e.target.checked);
-                    if (e.target.checked) setIsDiscount50(false);
-                  }} />감면 100%
-                </label>
+              <div style={{ marginTop: 8, border: '1px solid #eee', borderRadius: 8, overflow: 'hidden' }}>
+                <div style={{ padding: '10px 12px', borderBottom: '1px solid #eee', background: '#fafafa' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer', fontWeight: 500 }}>
+                    <input type="checkbox" checked={isJungGu} onChange={(e) => {
+                      setIsJungGu(e.target.checked);
+                      if (!e.target.checked) {
+                        setIsDiscount50(false); setIsDiscount100(false);
+                        setDiscRecipient(false); setDiscMultiChild(false); setDiscLowIncome(false);
+                        setDiscSingleParent(false); setDiscVeteran(false); setDiscDisabled(false); setDiscOther(false);
+                      }
+                    }} />
+                    중구민
+                  </label>
+                </div>
+                <div style={{ padding: '10px 12px', borderBottom: '1px solid #eee', display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', opacity: isJungGu ? 1 : 0.4 }}>
+                  <strong style={{ fontSize: 13, color: '#A32D2D', minWidth: 70 }}>감면 100%</strong>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: isJungGu ? 'pointer' : 'not-allowed' }}>
+                    <input type="checkbox" checked={discRecipient} disabled={!isJungGu} onChange={(e) => {
+                      setDiscRecipient(e.target.checked);
+                      setIsDiscount100(e.target.checked);
+                      if (e.target.checked) {
+                        setIsDiscount50(false);
+                        setDiscMultiChild(false); setDiscLowIncome(false); setDiscSingleParent(false);
+                        setDiscVeteran(false); setDiscDisabled(false); setDiscOther(false);
+                      }
+                    }} />
+                    수급자 (생계/의료/주거)
+                  </label>
+                </div>
+                <div style={{ padding: '10px 12px', display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap', opacity: isJungGu ? 1 : 0.4 }}>
+                  <strong style={{ fontSize: 13, color: '#BA7517', minWidth: 70, paddingTop: 2 }}>감면 50%</strong>
+                  <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', flex: 1 }}>
+                    {[
+                      { label: '다자녀', value: discMultiChild, setter: setDiscMultiChild, key: 'discMultiChild' },
+                      { label: '차상위', value: discLowIncome, setter: setDiscLowIncome, key: 'discLowIncome' },
+                      { label: '한부모', value: discSingleParent, setter: setDiscSingleParent, key: 'discSingleParent' },
+                      { label: '국가유공자', value: discVeteran, setter: setDiscVeteran, key: 'discVeteran' },
+                      { label: '장애인', value: discDisabled, setter: setDiscDisabled, key: 'discDisabled' },
+                      { label: '기타', value: discOther, setter: setDiscOther, key: 'discOther' },
+                    ].map(item => (
+                      <label key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: isJungGu ? 'pointer' : 'not-allowed' }}>
+                        <input type="checkbox" checked={item.value} disabled={!isJungGu} onChange={(e) => {
+                          item.setter(e.target.checked);
+                          const next = {
+                            discMultiChild, discLowIncome, discSingleParent, discVeteran, discDisabled, discOther,
+                            [item.key]: e.target.checked,
+                          };
+                          const any50 = Object.values(next).some(v => v);
+                          setIsDiscount50(any50);
+                          if (e.target.checked) {
+                            setIsDiscount100(false); setDiscRecipient(false);
+                          }
+                        }} />
+                        {item.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
+              {!isJungGu && (
+                <p style={{ fontSize: 11, color: '#888', marginTop: 6 }}>
+                  ※ 운영세칙상 중구민만 감면 적용 가능합니다
+                </p>
+              )}
             </div>
 
             <div style={{ marginBottom: 12 }}>

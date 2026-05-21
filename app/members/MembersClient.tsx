@@ -17,6 +17,13 @@ type Member = {
   is_jung_gu: boolean;
   is_discount_50: boolean;
   is_discount_100: boolean;
+  discount_recipient: boolean;
+  discount_multi_child: boolean;
+  discount_low_income: boolean;
+  discount_single_parent: boolean;
+  discount_veteran: boolean;
+  discount_disabled: boolean;
+  discount_other: boolean;
   received_date: string | null;
   memo: string;
   created_at: string;
@@ -38,6 +45,14 @@ export default function MembersClient() {
   const [isJungGu, setIsJungGu] = useState(false);
   const [isDiscount50, setIsDiscount50] = useState(false);
   const [isDiscount100, setIsDiscount100] = useState(false);
+  // 감면 사유
+  const [discRecipient, setDiscRecipient] = useState(false);
+  const [discMultiChild, setDiscMultiChild] = useState(false);
+  const [discLowIncome, setDiscLowIncome] = useState(false);
+  const [discSingleParent, setDiscSingleParent] = useState(false);
+  const [discVeteran, setDiscVeteran] = useState(false);
+  const [discDisabled, setDiscDisabled] = useState(false);
+  const [discOther, setDiscOther] = useState(false);
   const [memo, setMemo] = useState('');
 
   // 자동 계산되는 값
@@ -112,6 +127,8 @@ export default function MembersClient() {
   function resetForm() {
     setName(''); setPhone(''); setRrnFront(''); setAddress('');
     setIsJungGu(false); setIsDiscount50(false); setIsDiscount100(false);
+    setDiscRecipient(false); setDiscMultiChild(false); setDiscLowIncome(false);
+    setDiscSingleParent(false); setDiscVeteran(false); setDiscDisabled(false); setDiscOther(false);
     setMemo(''); setBirthDate(''); setGender(''); setRegionType('');
   }
 
@@ -128,6 +145,13 @@ export default function MembersClient() {
       is_jung_gu: isJungGu,
       is_discount_50: isDiscount50,
       is_discount_100: isDiscount100,
+      discount_recipient: discRecipient,
+      discount_multi_child: discMultiChild,
+      discount_low_income: discLowIncome,
+      discount_single_parent: discSingleParent,
+      discount_veteran: discVeteran,
+      discount_disabled: discDisabled,
+      discount_other: discOther,
       received_date: new Date().toISOString().split('T')[0],
       memo,
     };
@@ -235,26 +259,81 @@ export default function MembersClient() {
 
           <div style={{ marginBottom: 16 }}>
             <label style={labelStyle}>서류확인 (해당하는 항목 모두 체크)</label>
-            <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer' }}>
-                <input type="checkbox" checked={isJungGu} onChange={(e) => setIsJungGu(e.target.checked)} />
-                중구민
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer' }}>
-                <input type="checkbox" checked={isDiscount50} onChange={(e) => {
-                  setIsDiscount50(e.target.checked);
-                  if (e.target.checked) setIsDiscount100(false);
-                }} />
-                감면 50%
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer' }}>
-                <input type="checkbox" checked={isDiscount100} onChange={(e) => {
-                  setIsDiscount100(e.target.checked);
-                  if (e.target.checked) setIsDiscount50(false);
-                }} />
-                감면 100%
-              </label>
+            <div style={{ marginTop: 8, border: '1px solid #eee', borderRadius: 8, overflow: 'hidden' }}>
+              {/* 중구민 */}
+              <div style={{ padding: '10px 12px', borderBottom: '1px solid #eee', background: '#fafafa' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer', fontWeight: 500 }}>
+                  <input type="checkbox" checked={isJungGu} onChange={(e) => {
+                    setIsJungGu(e.target.checked);
+                    if (!e.target.checked) {
+                      // 중구민 해제 시 모든 감면 해제
+                      setIsDiscount50(false); setIsDiscount100(false);
+                      setDiscRecipient(false); setDiscMultiChild(false); setDiscLowIncome(false);
+                      setDiscSingleParent(false); setDiscVeteran(false); setDiscDisabled(false); setDiscOther(false);
+                    }
+                  }} />
+                  중구민
+                </label>
+              </div>
+              {/* 감면 100% */}
+              <div style={{ padding: '10px 12px', borderBottom: '1px solid #eee', display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', opacity: isJungGu ? 1 : 0.4 }}>
+                <strong style={{ fontSize: 13, color: '#A32D2D', minWidth: 70 }}>감면 100%</strong>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: isJungGu ? 'pointer' : 'not-allowed' }}>
+                  <input type="checkbox" checked={discRecipient} disabled={!isJungGu} onChange={(e) => {
+                    setDiscRecipient(e.target.checked);
+                    setIsDiscount100(e.target.checked);
+                    if (e.target.checked) {
+                      // 100% 체크 시 50% 사유 모두 해제
+                      setIsDiscount50(false);
+                      setDiscMultiChild(false); setDiscLowIncome(false); setDiscSingleParent(false);
+                      setDiscVeteran(false); setDiscDisabled(false); setDiscOther(false);
+                    }
+                  }} />
+                  수급자 (생계/의료/주거)
+                </label>
+              </div>
+              {/* 감면 50% */}
+              <div style={{ padding: '10px 12px', display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap', opacity: isJungGu ? 1 : 0.4 }}>
+                <strong style={{ fontSize: 13, color: '#BA7517', minWidth: 70, paddingTop: 2 }}>감면 50%</strong>
+                <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', flex: 1 }}>
+                  {[
+                    { label: '다자녀', value: discMultiChild, setter: setDiscMultiChild },
+                    { label: '차상위', value: discLowIncome, setter: setDiscLowIncome },
+                    { label: '한부모', value: discSingleParent, setter: setDiscSingleParent },
+                    { label: '국가유공자', value: discVeteran, setter: setDiscVeteran },
+                    { label: '장애인', value: discDisabled, setter: setDiscDisabled },
+                    { label: '기타', value: discOther, setter: setDiscOther },
+                  ].map(item => (
+                    <label key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: isJungGu ? 'pointer' : 'not-allowed' }}>
+                      <input type="checkbox" checked={item.value} disabled={!isJungGu} onChange={(e) => {
+                        item.setter(e.target.checked);
+                        // 50% 사유 중 하나라도 체크되면 is_discount_50=true
+                        const next = {
+                          discMultiChild, discLowIncome, discSingleParent, discVeteran, discDisabled, discOther,
+                          [item.label === '다자녀' ? 'discMultiChild' :
+                            item.label === '차상위' ? 'discLowIncome' :
+                            item.label === '한부모' ? 'discSingleParent' :
+                            item.label === '국가유공자' ? 'discVeteran' :
+                            item.label === '장애인' ? 'discDisabled' : 'discOther']: e.target.checked,
+                        };
+                        const any50 = Object.values(next).some(v => v);
+                        setIsDiscount50(any50);
+                        if (e.target.checked) {
+                          // 50% 체크 시 100% 해제
+                          setIsDiscount100(false); setDiscRecipient(false);
+                        }
+                      }} />
+                      {item.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
             </div>
+            {!isJungGu && (
+              <p style={{ fontSize: 11, color: '#888', marginTop: 6 }}>
+                ※ 운영세칙상 중구민만 감면 적용 가능합니다
+              </p>
+            )}
           </div>
 
           <div style={{ marginBottom: 16 }}>
