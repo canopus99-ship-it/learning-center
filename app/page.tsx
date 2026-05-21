@@ -33,6 +33,7 @@ export default async function Home() {
           <MenuCard href="/members" title="회원 관리" description="회원 등록 및 정보 관리" icon="👥" />
           <MenuCard href="/courses" title="강좌 관리" description="강좌 등록 및 관리" icon="📚" />
           <MenuCard href="/instructors" title="강사 관리" description="강사 정보 및 강사비" icon="👨‍🏫" />
+          <MenuCard href="/payroll" title="강사비" description="월별 강사료 자동 계산" icon="💵" />
           <MenuCard href="/payments" title="수납 관리" description="월별 수강료 결제" icon="💰" />
           <MenuCard href="/attendance" title="출석부" description="출석 체크 및 출석부 출력" icon="✅" />
           {staff.role === 'admin' && (
