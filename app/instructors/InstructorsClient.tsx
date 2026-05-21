@@ -11,7 +11,7 @@ type Instructor = {
   phone: string | null;
   pay_type: string;
   pay_amount: number;
-  class_minutes: number;
+  class_hours: number;
   bonus_note: string | null;
   bank_account: string | null;
   is_active: boolean;
@@ -33,7 +33,7 @@ export default function InstructorsClient() {
   const [phone, setPhone] = useState('');
   const [payType, setPayType] = useState('hourly');
   const [payAmount, setPayAmount] = useState('');
-  const [classMinutes, setClassMinutes] = useState('60');
+  const [classHours, setClassHours] = useState('1');
   const [bonusNote, setBonusNote] = useState('');
   const [bankAccount, setBankAccount] = useState('');
   const [memo, setMemo] = useState('');
@@ -71,7 +71,7 @@ export default function InstructorsClient() {
 
   function resetForm() {
     setName(''); setPhone(''); setPayType('hourly');
-    setPayAmount(''); setClassMinutes('60'); setBonusNote(''); setBankAccount(''); setMemo('');
+    setPayAmount(''); setClassHours('1'); setBonusNote(''); setBankAccount(''); setMemo('');
   }
 
   async function handleSubmit() {
@@ -85,7 +85,7 @@ export default function InstructorsClient() {
       phone: phone || null,
       pay_type: payType,
       pay_amount: parseInt(payAmount, 10) || 0,
-      class_minutes: parseInt(classMinutes, 10) || 60,
+      class_hours: parseFloat(classHours) || 1,
       bonus_note: bonusNote.trim() || null,
       bank_account: bankAccount.trim() || null,
       memo: memo.trim() || null,
@@ -206,8 +206,8 @@ export default function InstructorsClient() {
               <input value={payAmount} onChange={(e) => setPayAmount(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} placeholder="30000" />
             </div>
             <div>
-              <label style={labelStyle}>1회 강의 시간 (분)</label>
-              <input value={classMinutes} onChange={(e) => setClassMinutes(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} placeholder="60" />
+              <label style={labelStyle}>1회당 시간 (시간)</label>
+              <input value={classHours} onChange={(e) => setClassHours(e.target.value.replace(/[^0-9.]/g, ''))} style={inputStyle} placeholder="1.5" />
             </div>
           </div>
 
@@ -294,7 +294,7 @@ export default function InstructorsClient() {
                     {i.pay_type === 'hourly' ? '시급' : '일급'}{' '}
                     <strong>{i.pay_amount.toLocaleString()}원</strong>
                   </td>
-                  <td style={tdStyle}>{i.class_minutes}분</td>
+                  <td style={tdStyle}>{i.class_hours}시간</td>
                   <td style={tdStyle}>
                     {i.bonus_note ? (
                       <span style={{ fontSize: 12, color: '#666' }}>{i.bonus_note}</span>

@@ -11,7 +11,7 @@ type Instructor = {
   phone: string | null;
   pay_type: string;
   pay_amount: number;
-  class_minutes: number;
+  class_hours: number;
   bonus_note: string | null;
   bank_account: string | null;
   is_active: boolean;
@@ -34,7 +34,7 @@ export default function InstructorDetailClient({
   const [phone, setPhone] = useState(instructor.phone || '');
   const [payType, setPayType] = useState(instructor.pay_type || 'hourly');
   const [payAmount, setPayAmount] = useState(String(instructor.pay_amount || ''));
-  const [classMinutes, setClassMinutes] = useState(String(instructor.class_minutes || 60));
+  const [classHours, setClassHours] = useState(String(instructor.class_hours || 1));
   const [bonusNote, setBonusNote] = useState(instructor.bonus_note || '');
   const [bankAccount, setBankAccount] = useState(instructor.bank_account || '');
   const [memo, setMemo] = useState(instructor.memo || '');
@@ -61,7 +61,7 @@ export default function InstructorDetailClient({
       phone: phone || null,
       pay_type: payType,
       pay_amount: parseInt(payAmount, 10) || 0,
-      class_minutes: parseInt(classMinutes, 10) || 60,
+      class_hours: parseFloat(classHours) || 1,
       bonus_note: bonusNote.trim() || null,
       bank_account: bankAccount.trim() || null,
       memo: memo.trim() || null,
@@ -86,7 +86,7 @@ export default function InstructorDetailClient({
     setPhone(instructor.phone || '');
     setPayType(instructor.pay_type || 'hourly');
     setPayAmount(String(instructor.pay_amount || ''));
-    setClassMinutes(String(instructor.class_minutes || 60));
+    setClassHours(String(instructor.class_hours || 1));
     setBonusNote(instructor.bonus_note || '');
     setBankAccount(instructor.bank_account || '');
     setMemo(instructor.memo || '');
@@ -127,7 +127,7 @@ export default function InstructorDetailClient({
   const previewMonthlyPay = () => {
     const sessions = 8;
     if (instructor.pay_type === 'hourly') {
-      const hours = (instructor.class_minutes / 60) * sessions;
+      const hours = instructor.class_hours * sessions;
       return instructor.pay_amount * hours;
     } else {
       return instructor.pay_amount * sessions;
@@ -183,7 +183,7 @@ export default function InstructorDetailClient({
               label="급여"
               value={`${instructor.pay_type === 'hourly' ? '시급' : '일급'} ${instructor.pay_amount.toLocaleString()}원`}
             />
-            <InfoRow label="1회 강의 시간" value={`${instructor.class_minutes}분`} />
+            <InfoRow label="1회당 시간" value={`${instructor.class_hours}시간`} />
             <div style={{ gridColumn: '1 / -1' }}>
               <InfoRow label="입금계좌" value={instructor.bank_account} />
             </div>
@@ -221,8 +221,8 @@ export default function InstructorDetailClient({
                 <input value={payAmount} onChange={(e) => setPayAmount(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
               </div>
               <div>
-                <label style={labelStyle}>1회 강의 시간 (분)</label>
-                <input value={classMinutes} onChange={(e) => setClassMinutes(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
+                <label style={labelStyle}>1회당 시간 (시간)</label>
+                <input value={classHours} onChange={(e) => setClassHours(e.target.value.replace(/[^0-9.]/g, ''))} style={inputStyle} placeholder="1.5" />
               </div>
             </div>
 
@@ -253,7 +253,7 @@ export default function InstructorDetailClient({
         <p style={{ fontSize: 13, color: '#042C53', margin: 0, lineHeight: 1.7 }}>
           {instructor.pay_type === 'hourly' ? (
             <>
-              시급 <strong>{instructor.pay_amount.toLocaleString()}원</strong> × {instructor.class_minutes}분<br />
+              시급 <strong>{instructor.pay_amount.toLocaleString()}원</strong> × {instructor.class_hours}시간<br />
               월 8회 기준: <strong>{previewMonthlyPay().toLocaleString()}원</strong> {instructor.bonus_note && `+ 추가급여 (${instructor.bonus_note})`}
             </>
           ) : (
