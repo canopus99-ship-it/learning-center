@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus } from '@/lib/enrollment';
+import { PAYMENT_METHOD_LABELS } from '@/lib/payments';
 
 type Member = {
   id: number;
@@ -143,6 +144,25 @@ export default function MemberDetailClient({
   const [newCategory, setNewCategory] = useState('상담');
   const [newContent, setNewContent] = useState('');
 
+  // 결제 이력
+  type PaymentHistory = {
+    id: number;
+    enrollment_id: number;
+    payment_year: number;
+    payment_month: number;
+    amount: number;
+    is_paid: boolean;
+    paid_at: string | null;
+    payment_method: string | null;
+    refund_date: string | null;
+    refund_amount: number | null;
+    transfer_to_year: number | null;
+    transfer_to_month: number | null;
+    course_name: string;
+  };
+  const [payments, setPayments] = useState<PaymentHistory[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(true);
+
   // 강좌 추가 모달
   const [showAddCourse, setShowAddCourse] = useState(false);
   const [courseSearchQuery, setCourseSearchQuery] = useState('');
@@ -151,6 +171,7 @@ export default function MemberDetailClient({
 
   useEffect(() => {
     loadMemos();
+    loadPayments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -163,6 +184,32 @@ export default function MemberDetailClient({
       .order('created_at', { ascending: false });
     setMemos(data || []);
     setMemosLoading(false);
+  }
+
+  async function loadPayments() {
+    setPaymentsLoading(true);
+    // 이 회원의 모든 enrollment id
+    const enrollmentIds = enrollments.map(e => e.id);
+    if (enrollmentIds.length === 0) {
+      setPayments([]);
+      setPaymentsLoading(false);
+      return;
+    }
+    const { data } = await supabase
+      .from('payments')
+      .select('*')
+      .in('enrollment_id', enrollmentIds)
+      .order('payment_year', { ascending: false })
+      .order('payment_month', { ascending: false });
+    // enrollment_id → course_name 매핑
+    const eMap = new Map<number, string>();
+    enrollments.forEach(e => eMap.set(e.id, e.courses?.name || '-'));
+    const enriched: PaymentHistory[] = (data || []).map((p: any) => ({
+      ...p,
+      course_name: eMap.get(p.enrollment_id) || '-',
+    }));
+    setPayments(enriched);
+    setPaymentsLoading(false);
   }
 
   async function reloadEnrollments() {
@@ -826,6 +873,78 @@ export default function MemberDetailClient({
               </tbody>
             </table>
           </details>
+        )}
+      </div>
+
+      {/* 결제 이력 */}
+      <div style={{ background: 'white', borderRadius: 12, padding: 24, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+        <h2 style={{ fontSize: 16, margin: '0 0 16px' }}>
+          💰 결제 이력 ({payments.filter(p => p.is_paid).length}건)
+        </h2>
+        {paymentsLoading ? (
+          <p style={{ color: '#888', fontSize: 13 }}>불러오는 중...</p>
+        ) : payments.filter(p => p.is_paid).length === 0 ? (
+          <p style={{ color: '#888', fontSize: 13 }}>아직 결제 이력이 없습니다.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
+                  <th style={thStyle}>강좌</th>
+                  <th style={thStyle}>해당월</th>
+                  <th style={thStyle}>납부금액</th>
+                  <th style={thStyle}>납부일</th>
+                  <th style={thStyle}>방법</th>
+                  <th style={thStyle}>비고</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.filter(p => p.is_paid).map(p => {
+                  const isRefunded = !!p.refund_date;
+                  const isTransferred = !!p.transfer_to_year;
+                  return (
+                    <tr key={p.id} style={{ borderBottom: '1px solid #f0f0f0', opacity: isRefunded ? 0.6 : 1 }}>
+                      <td style={tdStyle}><strong>{p.course_name}</strong></td>
+                      <td style={tdStyle}>{p.payment_year}.{p.payment_month}월</td>
+                      <td style={tdStyle}>{p.amount.toLocaleString()}원</td>
+                      <td style={tdStyle}>{p.paid_at || '-'}</td>
+                      <td style={tdStyle}>{p.payment_method ? PAYMENT_METHOD_LABELS[p.payment_method as keyof typeof PAYMENT_METHOD_LABELS] : '-'}</td>
+                      <td style={tdStyle}>
+                        {isRefunded && (
+                          <span style={{ color: '#A32D2D', fontSize: 12 }}>
+                            🔙 환불 {p.refund_date}
+                            {p.refund_amount ? ` (${p.refund_amount.toLocaleString()}원)` : ''}
+                          </span>
+                        )}
+                        {isTransferred && (
+                          <span style={{ color: '#7B3FBF', fontSize: 12 }}>
+                            ↪ {p.transfer_to_year}.{p.transfer_to_month}월로 이월
+                          </span>
+                        )}
+                        {!isRefunded && !isTransferred && <span style={{ color: '#888' }}>-</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div style={{
+              marginTop: 12, padding: 10, background: '#f5f5f5', borderRadius: 6,
+              fontSize: 12, color: '#666', display: 'flex', justifyContent: 'space-between',
+            }}>
+              <span>
+                <strong>총 납부:</strong> {payments.filter(p => p.is_paid && !p.refund_date).reduce((s, p) => s + p.amount, 0).toLocaleString()}원
+                {payments.some(p => p.refund_date) && (
+                  <span style={{ marginLeft: 8, color: '#A32D2D' }}>
+                    (환불 {payments.filter(p => p.refund_date).reduce((s, p) => s + (p.refund_amount || 0), 0).toLocaleString()}원 제외)
+                  </span>
+                )}
+              </span>
+              <Link href="/payments" style={{ color: '#185FA5', textDecoration: 'none' }}>
+                수납관리에서 보기 →
+              </Link>
+            </div>
+          </div>
         )}
       </div>
 

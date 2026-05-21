@@ -1502,9 +1502,24 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                 <td style={tdStyle}><span style={badgeStyle(statusColor)}>{statusLabel}</span></td>
                                 <td style={tdStyle}>{p?.paid_at || '-'}</td>
                                 <td style={tdStyle}>
-                                  <button onClick={() => openPaymentModal(e, course, selectedMonth)} style={smallBtnStyle}>
-                                    {p?.is_paid ? '수정' : '결제처리'}
-                                  </button>
+                                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                    <button onClick={() => openPaymentModal(e, course, selectedMonth)} style={smallBtnStyle}>
+                                      {p?.is_paid ? '수정' : '결제처리'}
+                                    </button>
+                                    {e.status === 'ended' ? (
+                                      <span style={{ fontSize: 11, color: '#888', padding: '4px 6px' }}>
+                                        🛑 종료{(e as any).end_date ? ` (${(e as any).end_date})` : ''}
+                                      </span>
+                                    ) : (
+                                      <button
+                                        onClick={() => openEndScheduleModal(e)}
+                                        style={{ ...smallBtnStyle, color: '#A32D2D' }}
+                                        title="이 회원의 수강을 종료합니다"
+                                      >
+                                        🛑 종료
+                                      </button>
+                                    )}
+                                  </div>
                                 </td>
                               </tr>
                             );

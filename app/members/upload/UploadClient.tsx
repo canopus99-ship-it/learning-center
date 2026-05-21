@@ -404,7 +404,7 @@ export default function UploadClient() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead style={{ position: 'sticky', top: 0, background: '#fafafa', zIndex: 1 }}>
                 <tr style={{ borderBottom: '1px solid #ddd' }}>
-                  <th style={th}>행</th>
+                  <th style={th}>연번</th>
                   <th style={th}>상태</th>
                   <th style={th}>이름</th>
                   <th style={th}>연락처</th>
@@ -425,7 +425,7 @@ export default function UploadClient() {
                     : r.status === 'duplicate' ? '중복' : '오류';
                   return (
                     <tr key={idx} style={{ borderBottom: '1px solid #f0f0f0', background: r.status === 'duplicate' ? '#fffbf0' : r.status === 'error' ? '#fff5f5' : 'white' }}>
-                      <td style={td}>{r.rowIdx}</td>
+                      <td style={td}>{idx + 1}</td>
                       <td style={td}>
                         <span style={{
                           padding: '2px 6px', background: statusColor, color: 'white',
