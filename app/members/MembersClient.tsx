@@ -196,6 +196,18 @@ export default function MembersClient() {
         }}>
           {showForm ? '닫기' : '+ 신규 회원 등록'}
         </button>
+        <Link href="/members/upload" style={{
+          padding: '10px 16px',
+          background: '#1D9E75',
+          color: 'white',
+          border: 'none',
+          borderRadius: 8,
+          cursor: 'pointer',
+          fontSize: 14,
+          textDecoration: 'none',
+        }}>
+          📤 엑셀 일괄 업로드
+        </Link>
         <input
           type="text"
           value={searchQuery}
