@@ -1361,11 +1361,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                         <thead>
                           <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
                             <th style={thStyle}>이름</th>
-                            <th style={thStyle}>구분</th>
-                            <th style={thStyle}>감면</th>
+                            <th style={thStyle}>연락처</th>
                             <th style={thStyle}>{selectedMonth}월 상태</th>
-                            <th style={thStyle}>금액</th>
-                            <th style={thStyle}>방법</th>
                             <th style={thStyle}>결제일</th>
                             <th style={thStyle}>관리</th>
                           </tr>
@@ -1409,15 +1406,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     <span style={{ marginLeft: 4, fontSize: 10, padding: '1px 5px', background: '#7B3FBF', color: 'white', borderRadius: 3 }}>일시중지</span>
                                   )}
                                 </td>
-                                <td style={tdStyle}>{member.region_type || '-'}</td>
-                                <td style={tdStyle}>
-                                  {member.is_discount_100 ? (<span style={badgeStyle('#A32D2D')}>100%</span>
-                                  ) : member.is_discount_50 ? (<span style={badgeStyle('#BA7517')}>50%</span>
-                                  ) : '-'}
-                                </td>
+                                <td style={tdStyle}>{member.phone || '-'}</td>
                                 <td style={tdStyle}><span style={badgeStyle(statusColor)}>{statusLabel}</span></td>
-                                <td style={tdStyle}>{p ? p.amount.toLocaleString() : calc.amount.toLocaleString()}원</td>
-                                <td style={tdStyle}>{p?.payment_method ? PAYMENT_METHOD_LABELS[p.payment_method] : '-'}</td>
                                 <td style={tdStyle}>{p?.paid_at || '-'}</td>
                                 <td style={tdStyle}>
                                   <button onClick={() => openPaymentModal(e, course, selectedMonth)} style={smallBtnStyle}>
