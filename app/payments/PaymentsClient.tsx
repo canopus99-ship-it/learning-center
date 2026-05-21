@@ -14,6 +14,7 @@ import {
   type EndReason,
 } from '@/lib/payments';
 import { STATUS_LABELS, type EnrollmentStatus } from '@/lib/enrollment';
+import * as XLSX from 'xlsx';
 
 type Course = {
   id: number;
@@ -822,6 +823,86 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     return month <= todayMonth;
   }
 
+  // 강좌별 보기 엑셀 다운로드
+  function downloadByCourseExcel() {
+    const targetCourses = selectedCourseId === 'all'
+      ? courses
+      : courses.filter(c => c.id === selectedCourseId);
+
+    const rows: { 강좌명: string; 이름: string; 연락처: string; 상태: string; 결제일: string }[] = [];
+
+    targetCourses.forEach(course => {
+      const operationMonths = parseOperationMonths(course.operation_months);
+      const isOperating = operationMonths.includes(selectedMonth);
+      if (!isOperating) return; // 운영X 강좌는 제외
+
+      const courseEnrollments = getEnrollmentsByCourse(course.id);
+
+      const filtered = showUnpaidOnly
+        ? courseEnrollments.filter(e => {
+            if (!e.members) return false;
+            if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
+            if (selectedMonth === 1) return false;
+            const calc = calculateFee(course.fee_jung_gu, course.fee_other, e.members.is_jung_gu, e.members.is_discount_50, e.members.is_discount_100, course.is_free);
+            if (calc.amount === 0) return false;
+            const p = getPayment(e.id, selectedMonth);
+            return !p || !p.is_paid;
+          })
+        : courseEnrollments;
+
+      filtered.forEach(e => {
+        const member = e.members;
+        if (!member) return;
+        const p = getPayment(e.id, selectedMonth);
+        const calc = calculateFee(course.fee_jung_gu, course.fee_other, member.is_jung_gu, member.is_discount_50, member.is_discount_100, course.is_free);
+        const isAutoComplete = calc.amount === 0;
+        const pastOrCurrent = isPastOrCurrent(selectedMonth);
+        const isOTMonth = selectedMonth === 1;
+
+        let statusLabel = '';
+        if (p?.is_paid) statusLabel = '등록';
+        else if (isAutoComplete && pastOrCurrent) statusLabel = '자동등록';
+        else if (pastOrCurrent && !isOTMonth) statusLabel = '미납';
+        else statusLabel = isOTMonth ? '미등록(OT)' : '미등록';
+
+        rows.push({
+          강좌명: course.name,
+          이름: member.name,
+          연락처: member.phone || '',
+          상태: statusLabel,
+          결제일: p?.paid_at || '',
+        });
+      });
+    });
+
+    if (rows.length === 0) {
+      alert('다운로드할 데이터가 없습니다.');
+      return;
+    }
+
+    // 엑셀 생성
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // 컬럼 너비 설정
+    ws['!cols'] = [
+      { wch: 20 }, // 강좌명
+      { wch: 10 }, // 이름
+      { wch: 15 }, // 연락처
+      { wch: 12 }, // 상태
+      { wch: 12 }, // 결제일
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `${selectedMonth}월`);
+
+    // 파일명 생성
+    const courseName = selectedCourseId === 'all'
+      ? '전체'
+      : (courses.find(c => c.id === selectedCourseId)?.name || '강좌').replace(/[\\/:*?"<>|]/g, '');
+    const suffix = showUnpaidOnly ? '_미납자' : '';
+    const filename = `수납현황_${selectedYear}년${selectedMonth}월_${courseName}${suffix}.xlsx`;
+
+    XLSX.writeFile(wb, filename);
+  }
+
   // 미납자 목록 (전체 강좌)
   const allUnpaid = (() => {
     const result: { course: Course; enrollment: Enrollment; waitingCount: number; unpaidMonths: number[] }[] = [];
@@ -1300,6 +1381,17 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                   <input type="checkbox" checked={showUnpaidOnly} onChange={(e) => setShowUnpaidOnly(e.target.checked)} />
                   미납자만 보기
                 </label>
+                <button
+                  onClick={downloadByCourseExcel}
+                  style={{
+                    padding: '6px 14px', fontSize: 13, borderRadius: 6,
+                    background: '#1D9E75', color: 'white', border: 'none',
+                    cursor: 'pointer', fontWeight: 500,
+                  }}
+                  title="현재 화면 조건(강좌/미납자 필터) 그대로 엑셀로 다운로드합니다"
+                >
+                  📥 엑셀 다운로드
+                </button>
               </div>
 
               {(selectedCourseId === 'all' ? courses : courses.filter(c => c.id === selectedCourseId)).map(course => {
