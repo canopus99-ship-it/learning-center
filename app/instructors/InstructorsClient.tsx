@@ -13,6 +13,7 @@ type Instructor = {
   pay_amount: number;
   class_minutes: number;
   bonus_note: string | null;
+  bank_account: string | null;
   is_active: boolean;
   created_at: string;
   memo: string | null;
@@ -34,6 +35,7 @@ export default function InstructorsClient() {
   const [payAmount, setPayAmount] = useState('');
   const [classMinutes, setClassMinutes] = useState('60');
   const [bonusNote, setBonusNote] = useState('');
+  const [bankAccount, setBankAccount] = useState('');
   const [memo, setMemo] = useState('');
 
   useEffect(() => {
@@ -69,7 +71,7 @@ export default function InstructorsClient() {
 
   function resetForm() {
     setName(''); setPhone(''); setPayType('hourly');
-    setPayAmount(''); setClassMinutes('60'); setBonusNote(''); setMemo('');
+    setPayAmount(''); setClassMinutes('60'); setBonusNote(''); setBankAccount(''); setMemo('');
   }
 
   async function handleSubmit() {
@@ -85,6 +87,7 @@ export default function InstructorsClient() {
       pay_amount: parseInt(payAmount, 10) || 0,
       class_minutes: parseInt(classMinutes, 10) || 60,
       bonus_note: bonusNote.trim() || null,
+      bank_account: bankAccount.trim() || null,
       memo: memo.trim() || null,
       is_active: true,
     };
@@ -206,6 +209,14 @@ export default function InstructorsClient() {
               <label style={labelStyle}>1회 강의 시간 (분)</label>
               <input value={classMinutes} onChange={(e) => setClassMinutes(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} placeholder="60" />
             </div>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelStyle}>입금계좌</label>
+            <input value={bankAccount} onChange={(e) => setBankAccount(e.target.value)} style={inputStyle} placeholder="예: 국민은행 123-456-789012" />
+            <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
+              강사료 입금용. 강사료 지급 조서에 자동 입력됩니다
+            </p>
           </div>
 
           <div style={{ marginBottom: 12 }}>

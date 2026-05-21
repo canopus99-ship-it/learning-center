@@ -13,6 +13,7 @@ type Instructor = {
   pay_amount: number;
   class_minutes: number;
   bonus_note: string | null;
+  bank_account: string | null;
   is_active: boolean;
   created_at: string;
   memo: string | null;
@@ -35,6 +36,7 @@ export default function InstructorDetailClient({
   const [payAmount, setPayAmount] = useState(String(instructor.pay_amount || ''));
   const [classMinutes, setClassMinutes] = useState(String(instructor.class_minutes || 60));
   const [bonusNote, setBonusNote] = useState(instructor.bonus_note || '');
+  const [bankAccount, setBankAccount] = useState(instructor.bank_account || '');
   const [memo, setMemo] = useState(instructor.memo || '');
 
   function handlePhoneChange(value: string) {
@@ -61,6 +63,7 @@ export default function InstructorDetailClient({
       pay_amount: parseInt(payAmount, 10) || 0,
       class_minutes: parseInt(classMinutes, 10) || 60,
       bonus_note: bonusNote.trim() || null,
+      bank_account: bankAccount.trim() || null,
       memo: memo.trim() || null,
     };
 
@@ -85,6 +88,7 @@ export default function InstructorDetailClient({
     setPayAmount(String(instructor.pay_amount || ''));
     setClassMinutes(String(instructor.class_minutes || 60));
     setBonusNote(instructor.bonus_note || '');
+    setBankAccount(instructor.bank_account || '');
     setMemo(instructor.memo || '');
     setEditing(false);
   }
@@ -181,6 +185,9 @@ export default function InstructorDetailClient({
             />
             <InfoRow label="1회 강의 시간" value={`${instructor.class_minutes}분`} />
             <div style={{ gridColumn: '1 / -1' }}>
+              <InfoRow label="입금계좌" value={instructor.bank_account} />
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
               <InfoRow label="추가급여 메모" value={instructor.bonus_note} />
             </div>
             <div style={{ gridColumn: '1 / -1' }}>
@@ -217,6 +224,11 @@ export default function InstructorDetailClient({
                 <label style={labelStyle}>1회 강의 시간 (분)</label>
                 <input value={classMinutes} onChange={(e) => setClassMinutes(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
               </div>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelStyle}>입금계좌</label>
+              <input value={bankAccount} onChange={(e) => setBankAccount(e.target.value)} style={inputStyle} placeholder="예: 국민은행 123-456-789012" />
             </div>
 
             <div style={{ marginBottom: 12 }}>
