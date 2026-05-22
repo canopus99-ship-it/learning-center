@@ -711,9 +711,18 @@ export default function CourseDetailClient({
             수강생 명단 (수강중 {activeList.length}명 / 대기 {waitingList.length}명)
             {isFull && <span style={{ marginLeft: 8, fontSize: 11, padding: '2px 8px', background: '#A32D2D', color: 'white', borderRadius: 4 }}>정원 마감</span>}
           </h2>
-          <button onClick={() => setShowEnrollForm(!showEnrollForm)} style={primaryBtnStyle}>
-            {showEnrollForm ? '닫기' : '+ 수강신청 받기'}
-          </button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Link href={`/courses/${course.id}/enroll-upload`} style={{
+              padding: '8px 14px', fontSize: 13, borderRadius: 6,
+              background: '#1D9E75', color: 'white',
+              border: 'none', textDecoration: 'none', fontWeight: 500,
+            }}>
+              📤 엑셀 일괄 업로드
+            </Link>
+            <button onClick={() => setShowEnrollForm(!showEnrollForm)} style={primaryBtnStyle}>
+              {showEnrollForm ? '닫기' : '+ 수강신청 받기'}
+            </button>
+          </div>
         </div>
 
         {showEnrollForm && (
