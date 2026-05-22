@@ -64,12 +64,21 @@ const CATEGORY_COLORS: Record<string, string> = {
   '평등한시민': '#BA7517', '기타': '#666',
 };
 
+type Payment = {
+  id: number;
+  enrollment_id: number;
+  payment_year: number;
+  payment_month: number;
+  is_paid: boolean;
+};
+
 export default function CourseAttendanceClient({
   course,
   instructors,
   initialDates,
   initialEnrollments,
   initialAttendance,
+  initialPayments,
   initialDate,
   initialYear,
   initialMonth,
@@ -81,6 +90,7 @@ export default function CourseAttendanceClient({
   initialDates: CourseDate[];
   initialEnrollments: Enrollment[];
   initialAttendance: Attendance[];
+  initialPayments: Payment[];
   initialDate: string | null;
   initialYear: number;
   initialMonth: number;
@@ -91,6 +101,7 @@ export default function CourseAttendanceClient({
   const [dates, setDates] = useState<CourseDate[]>(initialDates);
   const [enrollments] = useState<Enrollment[]>(initialEnrollments);
   const [attendance, setAttendance] = useState<Attendance[]>(initialAttendance);
+  const [payments] = useState<Payment[]>(initialPayments);
 
   const [selectedYear, setSelectedYear] = useState(initialYear);
   const [selectedMonth, setSelectedMonth] = useState(initialMonth);
@@ -120,10 +131,39 @@ export default function CourseAttendanceClient({
   const selectedDate = selectedDateId ? dates.find(d => d.id === selectedDateId) : null;
 
   // 검색 필터 적용된 수강생 명단
-  // ended는 ended_at 이후라도 출석부에 표시는 함 (이전 출석 기록 보기 위해)
-  const allEnrollments = enrollments.filter(e =>
-    e.status === 'active' || e.status === 'paused' || e.status === 'ended'
-  );
+  // 표시 규칙:
+  //   1. 선택된 월에 결제 완료(is_paid=true)된 회원만 표시
+  //   2. 종료된 회원(ended)은 종료일이 속한 월까지만 표시 (이전 기록 확인용)
+  //      - 종료일이 5/20이면 5월까지는 보이고 6월부터는 안 보임
+  //   3. paused(일시중지)는 결제 있어도 그대로 표시
+  const allEnrollments = enrollments.filter(e => {
+    // 선택된 월의 마지막 날
+    const monthEnd = new Date(selectedYear, selectedMonth, 0); // 다음달 0일 = 이번달 말일
+    const monthEndStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
+    const monthStartStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
+
+    // 종료된 회원: 종료일이 이번 달 이후일 때만 표시
+    if (e.status === 'ended') {
+      if (!e.end_date) return false;
+      // 종료일이 선택된 월의 첫째날보다 이르면 출석부에서 제외 (이미 종료된 다음달)
+      if (e.end_date < monthStartStr) return false;
+      // 종료일이 속한 월에는 표시 (그 월 결제 여부와 무관 - 이미 진행 중이었으니)
+      return true;
+    }
+
+    // active 또는 paused: 그 월에 결제된 경우만 표시
+    if (e.status === 'active' || e.status === 'paused') {
+      const hasPaidThisMonth = payments.some(p =>
+        p.enrollment_id === e.id &&
+        p.payment_year === selectedYear &&
+        p.payment_month === selectedMonth &&
+        p.is_paid
+      );
+      return hasPaidThisMonth;
+    }
+
+    return false;
+  });
 
   const filteredEnrollments = allEnrollments
     .filter(e => {
@@ -318,7 +358,7 @@ export default function CourseAttendanceClient({
               </h3>
               <p style={{ fontSize: 12, color: '#888', margin: 0 }}>
                 🕐 {selectedDate.start_time.substring(0, 5)} ~ {selectedDate.end_time.substring(0, 5)}
-                · 출석 {perDateCount[selectedDate.id] || 0}명 / 수강생 {allEnrollments.filter(e => e.status === 'active' || e.status === 'paused').length}명
+                · 출석 {perDateCount[selectedDate.id] || 0}명 / 수강생 {allEnrollments.length}명
               </p>
             </div>
             <input
@@ -335,9 +375,19 @@ export default function CourseAttendanceClient({
               ⛔ 휴강된 수업입니다. 출석체크 불가.
             </p>
           ) : filteredEnrollments.length === 0 ? (
-            <p style={{ color: '#888', fontSize: 13, padding: 20, textAlign: 'center' }}>
-              {searchQuery ? '검색 결과가 없습니다.' : '수강생이 없습니다.'}
-            </p>
+            <div style={{ color: '#888', fontSize: 13, padding: 20, textAlign: 'center' }}>
+              {searchQuery ? (
+                '검색 결과가 없습니다.'
+              ) : (
+                <>
+                  수강생이 없습니다.
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#A32D2D' }}>
+                    💡 결제 완료된 회원만 출석부에 표시됩니다.<br />
+                    수강신청만 하고 결제하지 않은 회원은 <Link href="/payments" style={{ color: '#185FA5' }}>수납관리</Link>에서 결제 처리(무료/감면은 0원)해주세요.
+                  </div>
+                </>
+              )}
+            </div>
           ) : (
             <div style={{
               display: 'grid',
@@ -431,8 +481,8 @@ export default function CourseAttendanceClient({
           <SummaryBox label="수업 횟수" value={`${monthDates.filter(d => !d.is_cancelled).length}회`} color="#185FA5" />
           <SummaryBox label="휴강" value={`${monthDates.filter(d => d.is_cancelled).length}회`} color="#888" />
           <SummaryBox label="총 출석 인원" value={`${totalAttendance}명`} color="#1D9E75" />
-          <SummaryBox label="평균 출석률" value={`${monthDates.filter(d => !d.is_cancelled).length > 0 && allEnrollments.filter(e => e.status === 'active').length > 0
-            ? Math.round((totalAttendance / (monthDates.filter(d => !d.is_cancelled).length * allEnrollments.filter(e => e.status === 'active').length)) * 100)
+          <SummaryBox label="평균 출석률" value={`${monthDates.filter(d => !d.is_cancelled).length > 0 && allEnrollments.length > 0
+            ? Math.round((totalAttendance / (monthDates.filter(d => !d.is_cancelled).length * allEnrollments.length)) * 100)
             : 0}%`} color="#7B3FBF" />
         </div>
       </div>
@@ -460,16 +510,8 @@ function PrintableAttendance({
   enrollments: Enrollment[];
   attendance: Attendance[];
 }) {
-  // 인쇄용: 활성 수강생만 (이미 종료된 회원도 그 달에 출석 기록이 있으면 포함)
-  const printableEnrollments = enrollments
-    .filter(e => {
-      if (e.status === 'active' || e.status === 'paused') return true;
-      // ended 이지만 이 달에 출석 기록이 있는 경우 포함
-      const dateIds = dates.map(d => d.id);
-      return attendance.some(a =>
-        a.enrollment_id === e.id && dateIds.includes(a.course_date_id)
-      );
-    })
+  // 이미 상위에서 필터된 enrollments를 받음 (출석부 화면과 동일한 명단)
+  const printableEnrollments = [...enrollments]
     .sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || ''));
 
   // 양식: 10일치씩, 20명씩 한 페이지

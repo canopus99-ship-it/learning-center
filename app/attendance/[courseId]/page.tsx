@@ -29,7 +29,7 @@ export default async function CourseAttendancePage({
 
   const supabase = await createClient();
 
-  const [courseRes, instructorsRes, datesRes, enrollmentsRes, attendanceRes] = await Promise.all([
+  const [courseRes, instructorsRes, datesRes, enrollmentsRes, attendanceRes, paymentsRes] = await Promise.all([
     supabase.from('courses').select('*').eq('id', courseId).single(),
     supabase.from('instructors').select('id, name'),
     supabase.from('course_dates').select('*').eq('course_id', courseId).order('class_date').order('start_time'),
@@ -42,9 +42,17 @@ export default async function CourseAttendancePage({
       .from('attendance')
       .select('*, course_dates!inner(course_id)')
       .eq('course_dates.course_id', courseId),
+    // 결제 데이터 (이 강좌의 enrollment에 해당하는 것만)
+    supabase
+      .from('payments')
+      .select('id, enrollment_id, payment_year, payment_month, is_paid'),
   ]);
 
   if (!courseRes.data) notFound();
+
+  // 이 강좌의 enrollment id 모음 → 결제 필터링
+  const courseEnrollmentIds = new Set((enrollmentsRes.data || []).map(e => e.id));
+  const coursePayments = (paymentsRes.data || []).filter(p => courseEnrollmentIds.has(p.enrollment_id));
 
   return (
     <div>
@@ -55,6 +63,7 @@ export default async function CourseAttendancePage({
         initialDates={datesRes.data || []}
         initialEnrollments={enrollmentsRes.data || []}
         initialAttendance={attendanceRes.data || []}
+        initialPayments={coursePayments}
         initialDate={date || null}
         initialYear={year ? parseInt(year, 10) : new Date().getFullYear()}
         initialMonth={month ? parseInt(month, 10) : new Date().getMonth() + 1}
