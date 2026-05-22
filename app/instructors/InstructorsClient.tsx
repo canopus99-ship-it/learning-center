@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import * as XLSX from 'xlsx';
 
 type Instructor = {
   id: number;
@@ -74,6 +75,46 @@ export default function InstructorsClient() {
     setPayAmount(''); setClassHours('1'); setBonusNote(''); setBankAccount(''); setMemo('');
   }
 
+  // 강사 명부 엑셀 다운로드
+  function downloadInstructorsExcel() {
+    if (instructors.length === 0) {
+      alert('다운로드할 강사가 없습니다.');
+      return;
+    }
+    const headers = [
+      '연번', '이름', '연락처', '활동여부',
+      '급여방식', '단가', '1회당시간',
+      '입금계좌', '추가급여메모', '메모', '등록일'
+    ];
+    const sorted = [...instructors].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const rows: (string | number)[][] = [headers];
+    sorted.forEach((i, idx) => {
+      rows.push([
+        idx + 1,
+        i.name || '',
+        i.phone || '',
+        i.is_active ? '활동중' : '비활동',
+        i.pay_type === 'hourly' ? '시급' : '일급',
+        i.pay_amount || 0,
+        i.class_hours || 0,
+        i.bank_account || '',
+        i.bonus_note || '',
+        i.memo || '',
+        i.created_at ? i.created_at.substring(0, 10) : '',
+      ]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [
+      { wch: 5 }, { wch: 10 }, { wch: 16 }, { wch: 8 },
+      { wch: 8 }, { wch: 10 }, { wch: 10 },
+      { wch: 24 }, { wch: 24 }, { wch: 24 }, { wch: 12 },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '강사명부');
+    const today = new Date().toISOString().split('T')[0];
+    XLSX.writeFile(wb, `강사명부_${today}.xlsx`);
+  }
+
   async function handleSubmit() {
     if (!name.trim()) {
       alert('이름을 입력하세요');
@@ -136,6 +177,17 @@ export default function InstructorsClient() {
           fontSize: 14,
         }}>
           {showForm ? '닫기' : '+ 신규 강사 등록'}
+        </button>
+        <button onClick={downloadInstructorsExcel} style={{
+          padding: '10px 16px',
+          background: '#7B3FBF',
+          color: 'white',
+          border: 'none',
+          borderRadius: 8,
+          cursor: 'pointer',
+          fontSize: 14,
+        }}>
+          📥 명부 다운로드
         </button>
         <input
           type="text"

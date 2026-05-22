@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import * as XLSX from 'xlsx';
 
 type Member = {
   id: number;
@@ -132,6 +133,60 @@ export default function MembersClient() {
     setMemo(''); setBirthDate(''); setGender(''); setRegionType('');
   }
 
+  // 회원 명부 엑셀 다운로드
+  function downloadMembersExcel() {
+    if (members.length === 0) {
+      alert('다운로드할 회원이 없습니다.');
+      return;
+    }
+    // 헤더
+    const headers = [
+      '연번', '이름', '연락처', '주민번호앞', '생년월일', '성별', '거주구분', '주소',
+      '중구민', '감면100%', '감면50%',
+      '수급자', '다자녀', '차상위', '한부모', '국가유공자', '장애인', '기타',
+      '접수일', '메모'
+    ];
+    // 이름 정렬
+    const sorted = [...members].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const rows: (string | number)[][] = [headers];
+    sorted.forEach((m, idx) => {
+      rows.push([
+        idx + 1,
+        m.name || '',
+        m.phone || '',
+        m.rrn_front || '',
+        m.birth_date || '',
+        m.gender || '',
+        m.region_type || '',
+        m.address || '',
+        m.is_jung_gu ? 'O' : '',
+        m.is_discount_100 ? 'O' : '',
+        m.is_discount_50 ? 'O' : '',
+        (m as any).discount_recipient ? 'O' : '',
+        (m as any).discount_multi_child ? 'O' : '',
+        (m as any).discount_low_income ? 'O' : '',
+        (m as any).discount_single_parent ? 'O' : '',
+        (m as any).discount_veteran ? 'O' : '',
+        (m as any).discount_disabled ? 'O' : '',
+        (m as any).discount_other ? 'O' : '',
+        m.received_date || '',
+        m.memo || '',
+      ]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [
+      { wch: 5 }, { wch: 10 }, { wch: 16 }, { wch: 12 }, { wch: 12 },
+      { wch: 6 }, { wch: 8 }, { wch: 28 },
+      { wch: 7 }, { wch: 8 }, { wch: 7 },
+      { wch: 7 }, { wch: 7 }, { wch: 7 }, { wch: 7 }, { wch: 10 }, { wch: 7 }, { wch: 7 },
+      { wch: 12 }, { wch: 24 },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '회원명부');
+    const today = new Date().toISOString().split('T')[0];
+    XLSX.writeFile(wb, `회원명부_${today}.xlsx`);
+  }
+
   async function handleSubmit() {
     if (!name.trim()) {
       alert('이름을 입력하세요');
@@ -208,6 +263,17 @@ export default function MembersClient() {
         }}>
           📤 엑셀 일괄 업로드
         </Link>
+        <button onClick={downloadMembersExcel} style={{
+          padding: '10px 16px',
+          background: '#7B3FBF',
+          color: 'white',
+          border: 'none',
+          borderRadius: 8,
+          cursor: 'pointer',
+          fontSize: 14,
+        }}>
+          📥 명부 다운로드
+        </button>
         <input
           type="text"
           value={searchQuery}
