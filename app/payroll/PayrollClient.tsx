@@ -10,6 +10,7 @@ type Course = {
   category: string;
   name: string;
   instructor_id: number | null;
+  sub_instructor_id: number | null;
   is_active: boolean;
   operation_months: string | null;
 };
@@ -110,8 +111,8 @@ export default function PayrollClient() {
     setLoading(false);
   }
 
-  function calcCoursePay(course: Course) {
-    const instructor = instructors.find(i => i.id === course.instructor_id) || null;
+  // 강사 인자를 받아서 계산 (주/보조 강사 공통)
+  function calcPay(course: Course, instructor: Instructor | null) {
     const allDates = courseDates.filter(d => d.course_id === course.id);
     const activeDates = allDates.filter(d => !d.is_cancelled);
     const sessions = activeDates.length;
@@ -131,17 +132,50 @@ export default function PayrollClient() {
     }
   }
 
-  const targetCourses = courses.filter(c => {
-    if (!c.instructor_id) return false;
-    const operationMonths = parseOperationMonths(c.operation_months);
-    if (!operationMonths.includes(selectedMonth)) return false;
-    const hasDates = courseDates.some(d => d.course_id === c.id);
-    return hasDates;
-  });
+  // 강좌×강사 튜플 (주강사 + 보조강사 모두 펼침)
+  type PayrollItem = {
+    key: string;          // course.id + role
+    course: Course;
+    instructor: Instructor;
+    role: 'main' | 'sub'; // 주/보조
+  };
 
-  const totalAmount = targetCourses.reduce((sum, c) => sum + calcCoursePay(c).amount, 0);
+  const payrollItems: PayrollItem[] = (() => {
+    const items: PayrollItem[] = [];
+    courses.forEach(course => {
+      const operationMonths = parseOperationMonths(course.operation_months);
+      if (!operationMonths.includes(selectedMonth)) return;
+      const hasDates = courseDates.some(d => d.course_id === course.id);
+      if (!hasDates) return;
+
+      const main = instructors.find(i => i.id === course.instructor_id);
+      if (main) items.push({ key: `${course.id}-main`, course, instructor: main, role: 'main' });
+      const sub = instructors.find(i => i.id === course.sub_instructor_id);
+      if (sub) items.push({ key: `${course.id}-sub`, course, instructor: sub, role: 'sub' });
+    });
+    return items;
+  })();
+
+  // 강좌 목록 (체크박스용, 중복 제거)
+  const targetCourses = (() => {
+    const seen = new Set<number>();
+    const result: Course[] = [];
+    payrollItems.forEach(item => {
+      if (!seen.has(item.course.id)) {
+        seen.add(item.course.id);
+        result.push(item.course);
+      }
+    });
+    return result;
+  })();
+
+  // 전체 합계 (모든 강사료)
+  const totalAmount = payrollItems.reduce((sum, item) => sum + calcPay(item.course, item.instructor).amount, 0);
+
+  // 선택된 강좌의 강사료
+  const selectedItems = payrollItems.filter(item => selectedCourseIds.has(item.course.id));
   const selectedCourses = targetCourses.filter(c => selectedCourseIds.has(c.id));
-  const selectedAmount = selectedCourses.reduce((sum, c) => sum + calcCoursePay(c).amount, 0);
+  const selectedAmount = selectedItems.reduce((sum, item) => sum + calcPay(item.course, item.instructor).amount, 0);
 
   function toggleCourse(id: number) {
     const next = new Set(selectedCourseIds);
@@ -172,17 +206,18 @@ export default function PayrollClient() {
     summaryRows.push([]);
     summaryRows.push(['연번', '프로그램명', '강사명', '단가(시/일급)', '시간(시/일)', '인센티브', '강사료(원)', '계좌번호', '비고']);
 
-    selectedCourses.forEach((course, idx) => {
-      const { instructor, sessions, totalHours, amount } = calcCoursePay(course);
-      if (!instructor) return;
+    selectedItems.forEach((item, idx) => {
+      const { course, instructor, role } = item;
+      const { sessions, totalHours, amount } = calcPay(course, instructor);
       const unit = instructor.pay_type === 'hourly' ? totalHours : sessions;
+      const roleLabel = role === 'sub' ? ' (보조)' : '';
       const note = instructor.pay_type === 'hourly'
-        ? `1회 ${instructor.class_hours}시간`
-        : '일급 기준';
+        ? `1회 ${instructor.class_hours}시간${roleLabel}`
+        : `일급 기준${roleLabel}`;
       summaryRows.push([
         idx + 1,
         course.name,
-        instructor.name,
+        instructor.name + roleLabel,
         instructor.pay_amount,
         unit,
         0,
@@ -192,7 +227,7 @@ export default function PayrollClient() {
       ]);
     });
 
-    const totalSum = selectedCourses.reduce((s, c) => s + calcCoursePay(c).amount, 0);
+    const totalSum = selectedItems.reduce((s, item) => s + calcPay(item.course, item.instructor).amount, 0);
     summaryRows.push(['합계', '', '', '', '', '', totalSum, '-', '']);
 
     const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
@@ -203,11 +238,19 @@ export default function PayrollClient() {
     wsSummary['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 8 } }];
     XLSX.utils.book_append_sheet(wb, wsSummary, '총괄');
 
-    // === 강좌별 시트 ===
+    // === 강좌별 시트 (강좌당 1개, 강사 여러 명이면 같은 시트에 여러 줄) ===
     const usedNames = new Set<string>();
     selectedCourses.forEach(course => {
-      const { instructor, sessions, totalHours, amount, activeDates } = calcCoursePay(course);
-      if (!instructor) return;
+      // 이 강좌의 강사들 (주+보조)
+      const courseInstructors = selectedItems
+        .filter(item => item.course.id === course.id)
+        .map(item => ({ instructor: item.instructor, role: item.role }));
+      if (courseInstructors.length === 0) return;
+
+      // activeDates는 강좌별로 공통
+      const sample = calcPay(course, courseInstructors[0].instructor);
+      const activeDates = sample.activeDates;
+      const sessions = sample.sessions;
 
       const rows: (string | number)[][] = [];
       rows.push(['강사료 지급 조서']);
@@ -216,6 +259,7 @@ export default function PayrollClient() {
       rows.push(['강사명', '강의주제\n(사업명)', '강의일자\n(강의시간)', '강사료\n(A)', '원천징수 공제액', '', '', '실지급액\n(A-B)', '입금계좌', '확인']);
       rows.push(['', '', '', '', '계(B)', '소득세\n(A*3%)', '지방소득세\n(소득세의 10%)', '', '', '']);
 
+      // 강의일자 텍스트 생성 (주강사 기준으로 1번)
       let dateText = '';
       if (activeDates.length > 0) {
         const first = activeDates[0];
@@ -225,31 +269,40 @@ export default function PayrollClient() {
         const timeText = (first.start_time && first.end_time)
           ? `${trimTime(first.start_time)}~${trimTime(first.end_time)}`
           : '';
-        const summary = instructor.pay_type === 'hourly'
-          ? `(주 1회 ${dowFirst},\n총 ${totalHours}시간)`
+        const mainInst = courseInstructors[0].instructor;
+        const totalH = mainInst.class_hours * sessions;
+        const summary = mainInst.pay_type === 'hourly'
+          ? `(주 1회 ${dowFirst},\n총 ${totalH}시간)`
           : `(총 ${sessions}회)`;
         dateText = [startEnd, timeText, summary].filter(Boolean).join('\n');
       }
 
-      const { incomeTax, localTax, totalTax, netPay } = calcTax(amount);
+      // 각 강사별 데이터 행
+      const noteTexts: string[] = [];
+      courseInstructors.forEach(({ instructor, role }) => {
+        const { amount } = calcPay(course, instructor);
+        const { incomeTax, localTax, totalTax, netPay } = calcTax(amount);
+        const roleLabel = role === 'sub' ? ' (보조)' : '';
+        rows.push([
+          instructor.name + roleLabel,
+          course.name,
+          dateText,
+          amount,
+          totalTax,
+          incomeTax,
+          localTax,
+          netPay,
+          instructor.bank_account || '',
+          '',
+        ]);
+        const noteText = instructor.pay_type === 'hourly'
+          ? `※ ${instructor.name}${roleLabel}: 1시간당 ${instructor.pay_amount.toLocaleString()}원`
+          : `※ ${instructor.name}${roleLabel}: 일급 ${instructor.pay_amount.toLocaleString()}원`;
+        noteTexts.push(noteText);
+      });
 
-      rows.push([
-        instructor.name,
-        course.name,
-        dateText,
-        amount,
-        totalTax,
-        incomeTax,
-        localTax,
-        netPay,
-        instructor.bank_account || '',
-        '',
-      ]);
-
-      const noteText = instructor.pay_type === 'hourly'
-        ? `※ ${instructor.name}: 1시간당 ${instructor.pay_amount.toLocaleString()}원`
-        : `※ ${instructor.name}: 일급 ${instructor.pay_amount.toLocaleString()}원`;
-      rows.push([noteText]);
+      // 비고 (모든 강사 각 1줄)
+      noteTexts.forEach(t => rows.push([t]));
       rows.push(['중림종합사회복지관']);
 
       const ws = XLSX.utils.aoa_to_sheet(rows);
@@ -257,20 +310,33 @@ export default function PayrollClient() {
         { wch: 10 }, { wch: 16 }, { wch: 28 }, { wch: 12 }, { wch: 10 },
         { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 24 }, { wch: 8 },
       ];
-      ws['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: 9 } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } },
-        { s: { r: 3, c: 0 }, e: { r: 4, c: 0 } },
-        { s: { r: 3, c: 1 }, e: { r: 4, c: 1 } },
-        { s: { r: 3, c: 2 }, e: { r: 4, c: 2 } },
-        { s: { r: 3, c: 3 }, e: { r: 4, c: 3 } },
-        { s: { r: 3, c: 4 }, e: { r: 3, c: 6 } },
-        { s: { r: 3, c: 7 }, e: { r: 4, c: 7 } },
-        { s: { r: 3, c: 8 }, e: { r: 4, c: 8 } },
-        { s: { r: 3, c: 9 }, e: { r: 4, c: 9 } },
-        { s: { r: 6, c: 0 }, e: { r: 6, c: 2 } },
-        { s: { r: 7, c: 0 }, e: { r: 7, c: 9 } },
+      // 병합: 헤더 2줄 병합 + 강의일자 셀 강사 수만큼 세로 병합
+      const numInstr = courseInstructors.length;
+      const merges: any[] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 9 } },     // 제목
+        { s: { r: 1, c: 0 }, e: { r: 1, c: 9 } },     // 단위
+        { s: { r: 3, c: 0 }, e: { r: 4, c: 0 } },     // 강사명 헤더
+        { s: { r: 3, c: 1 }, e: { r: 4, c: 1 } },     // 강의주제 헤더
+        { s: { r: 3, c: 2 }, e: { r: 4, c: 2 } },     // 강의일자 헤더
+        { s: { r: 3, c: 3 }, e: { r: 4, c: 3 } },     // 강사료 헤더
+        { s: { r: 3, c: 4 }, e: { r: 3, c: 6 } },     // 원천징수 가로
+        { s: { r: 3, c: 7 }, e: { r: 4, c: 7 } },     // 실지급액 헤더
+        { s: { r: 3, c: 8 }, e: { r: 4, c: 8 } },     // 입금계좌 헤더
+        { s: { r: 3, c: 9 }, e: { r: 4, c: 9 } },     // 확인 헤더
       ];
+      // 강사가 2명 이상이면 강의주제(1), 강의일자(2) 셀을 세로로 병합
+      if (numInstr > 1) {
+        merges.push({ s: { r: 5, c: 1 }, e: { r: 5 + numInstr - 1, c: 1 } });
+        merges.push({ s: { r: 5, c: 2 }, e: { r: 5 + numInstr - 1, c: 2 } });
+      }
+      // 비고 가로 병합
+      const noteStartRow = 5 + numInstr;
+      noteTexts.forEach((_, idx) => {
+        merges.push({ s: { r: noteStartRow + idx, c: 0 }, e: { r: noteStartRow + idx, c: 9 } });
+      });
+      // 기관명 가로 병합
+      merges.push({ s: { r: noteStartRow + noteTexts.length, c: 0 }, e: { r: noteStartRow + noteTexts.length, c: 9 } });
+      ws['!merges'] = merges;
 
       // 시트명 (특수문자 제거, 31자 제한, 중복 방지)
       let baseName = course.name.replace(/[\\/?*[\]:]/g, '').substring(0, 31);
@@ -391,9 +457,13 @@ export default function PayrollClient() {
           </div>
 
           {targetCourses.map(course => {
-            const { instructor, sessions, cancelledCount, totalHours, amount } = calcCoursePay(course);
             const isChecked = selectedCourseIds.has(course.id);
-            const { netPay } = calcTax(amount);
+            const courseInstructors = payrollItems.filter(item => item.course.id === course.id);
+            const sample = calcPay(course, courseInstructors[0]?.instructor || null);
+            const sessions = sample.sessions;
+            const cancelledCount = sample.cancelledCount;
+            const courseTotalAmount = courseInstructors.reduce((s, item) => s + calcPay(course, item.instructor).amount, 0);
+            const courseTotalNet = courseInstructors.reduce((s, item) => s + calcTax(calcPay(course, item.instructor).amount).netPay, 0);
             return (
               <div
                 key={course.id}
@@ -429,64 +499,70 @@ export default function PayrollClient() {
                         >
                           <strong style={{ fontSize: 15 }}>{course.name}</strong>
                         </Link>
-                      </div>
-                      {instructor ? (
-                        <div style={{ fontSize: 13, color: '#555', lineHeight: 1.8 }}>
-                          <div>
-                            <Link
-                              href={`/instructors/${instructor.id}`}
-                              onClick={(e) => e.stopPropagation()}
-                              style={{ color: '#185FA5', textDecoration: 'none' }}
-                            >
-                              <strong>{instructor.name}</strong>
-                            </Link>
-                            {' · '}
-                            {instructor.pay_type === 'hourly' ? '시급' : '일급'}{' '}
-                            <strong>{instructor.pay_amount.toLocaleString()}원</strong>
-                            {instructor.pay_type === 'hourly' && (
-                              <> × {instructor.class_hours}시간/회</>
-                            )}
-                          </div>
-                          <div style={{ color: '#888', fontSize: 12 }}>
-                            수업 {sessions}회
-                            {cancelledCount > 0 && (
-                              <span style={{ marginLeft: 6, color: '#A32D2D' }}>
-                                (휴강 {cancelledCount}회 제외)
-                              </span>
-                            )}
-                            {instructor.pay_type === 'hourly' && (
-                              <span style={{ marginLeft: 6 }}>· 총 {totalHours}시간</span>
-                            )}
-                            {!instructor.bank_account && (
-                              <span style={{ marginLeft: 6, color: '#A32D2D' }}>
-                                ⚠ 계좌 미입력
-                              </span>
-                            )}
-                          </div>
-                          {instructor.bonus_note && (
-                            <div style={{ color: '#BA7517', fontSize: 12, marginTop: 2 }}>
-                              ⚠ 추가급여: {instructor.bonus_note}
-                            </div>
+                        <span style={{ fontSize: 12, color: '#888' }}>
+                          · 수업 {sessions}회
+                          {cancelledCount > 0 && (
+                            <span style={{ marginLeft: 4, color: '#A32D2D' }}>(휴강 {cancelledCount})</span>
                           )}
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 13, color: '#A32D2D' }}>강사 미배정</div>
-                      )}
+                        </span>
+                      </div>
+                      {/* 강사별 1줄씩 */}
+                      {courseInstructors.map(({ instructor, role }) => {
+                        const { totalHours, amount } = calcPay(course, instructor);
+                        return (
+                          <div key={`${course.id}-${role}`} style={{
+                            fontSize: 13, color: '#555', lineHeight: 1.6,
+                            padding: '6px 8px', marginTop: 4,
+                            background: role === 'sub' ? '#FAFAFA' : '#F0F7FF',
+                            borderLeft: role === 'sub' ? '3px solid #BA7517' : '3px solid #185FA5',
+                            borderRadius: 4,
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                              <div>
+                                <span style={{
+                                  fontSize: 10, padding: '1px 6px', borderRadius: 3, marginRight: 6,
+                                  background: role === 'sub' ? '#BA7517' : '#185FA5', color: 'white',
+                                }}>{role === 'sub' ? '보조강사' : '주강사'}</span>
+                                <Link
+                                  href={`/instructors/${instructor.id}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{ color: '#185FA5', textDecoration: 'none' }}
+                                >
+                                  <strong>{instructor.name}</strong>
+                                </Link>
+                                {' · '}
+                                {instructor.pay_type === 'hourly' ? '시급' : '일급'}{' '}
+                                <strong>{instructor.pay_amount.toLocaleString()}원</strong>
+                                {instructor.pay_type === 'hourly' && (
+                                  <span style={{ color: '#888' }}> × {instructor.class_hours}시간/회 = 총 {totalHours}시간</span>
+                                )}
+                                {!instructor.bank_account && (
+                                  <span style={{ marginLeft: 6, color: '#A32D2D', fontSize: 11 }}>⚠ 계좌 미입력</span>
+                                )}
+                                {instructor.bonus_note && (
+                                  <span style={{ marginLeft: 6, color: '#BA7517', fontSize: 11 }}>⚠ {instructor.bonus_note}</span>
+                                )}
+                              </div>
+                              <div style={{ fontWeight: 600, color: '#185FA5' }}>
+                                {amount.toLocaleString()}원
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
                   <div style={{ textAlign: 'right', minWidth: 140 }}>
-                    <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>강사료</div>
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>강좌 합계</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#185FA5' }}>
-                      {amount.toLocaleString()}원
+                      {courseTotalAmount.toLocaleString()}원
                     </div>
-                    {instructor && (
-                      <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
-                        실지급 {netPay.toLocaleString()}원
-                        <br />
-                        <span style={{ fontSize: 10 }}>(원천징수 3.3% 공제)</span>
-                      </div>
-                    )}
+                    <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
+                      실지급 {courseTotalNet.toLocaleString()}원
+                      <br />
+                      <span style={{ fontSize: 10 }}>(원천징수 3.3% 공제)</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -505,7 +581,8 @@ export default function PayrollClient() {
               <li>시급: 단가 × 1회당 시간 × 수업 횟수 / 일급: 단가 × 수업 횟수</li>
               <li>휴강된 수업은 제외, 보강은 포함됩니다</li>
               <li>원천징수 3.3% 자동 공제 (10원 단위 절사)</li>
-              <li>인센티브, 반주강사 등 일부 정보는 엑셀에서 수기로 보정해주세요</li>
+              <li>강좌에 주강사/보조강사가 있으면 각각 자동 계산됩니다 (각자 단가 기준)</li>
+              <li>인센티브 등 추가 정보는 엑셀에서 수기로 보정해주세요</li>
             </ul>
           </div>
         </>

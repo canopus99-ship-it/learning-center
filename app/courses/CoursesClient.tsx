@@ -11,6 +11,7 @@ type Course = {
   category: string;
   name: string;
   instructor_id: number | null;
+  sub_instructor_id: number | null;
   classroom: string | null;
   capacity: number;
   operation_type: string;
@@ -81,6 +82,7 @@ export default function CoursesClient() {
   const [category, setCategory] = useState('문화강좌');
   const [name, setName] = useState('');
   const [instructorId, setInstructorId] = useState<string>('');
+  const [subInstructorId, setSubInstructorId] = useState<string>('');
   const [classroom, setClassroom] = useState('');
   const [capacity, setCapacity] = useState('20');
 
@@ -197,7 +199,7 @@ export default function CoursesClient() {
   }
 
   function resetForm() {
-    setCategory('문화강좌'); setName(''); setInstructorId('');
+    setCategory('문화강좌'); setName(''); setInstructorId(''); setSubInstructorId('');
     setClassroom(''); setCapacity('20');
     setOperationType('regular');
     setOperationMonths([...ALL_MONTHS]);
@@ -230,6 +232,7 @@ export default function CoursesClient() {
       category,
       name: name.trim(),
       instructor_id: instructorId ? parseInt(instructorId, 10) : null,
+      sub_instructor_id: subInstructorId ? parseInt(subInstructorId, 10) : null,
       classroom: classroom || null,
       capacity: parseInt(capacity, 10) || 20,
       operation_type: operationType,
@@ -435,20 +438,31 @@ export default function CoursesClient() {
             </div>
           </div>
 
-          <div style={{ marginBottom: 12 }}>
-            <label style={labelStyle}>강사</label>
-            <select value={instructorId} onChange={(e) => setInstructorId(e.target.value)} style={inputStyle}>
-              <option value="">(미정)</option>
-              {activeInstructors.map(i => (
-                <option key={i.id} value={i.id}>{i.name}</option>
-              ))}
-            </select>
-            {activeInstructors.length === 0 && (
-              <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
-                활동중인 강사가 없습니다. <Link href="/instructors" style={{ color: '#185FA5' }}>강사 등록</Link> 후 다시 시도하세요.
-              </p>
-            )}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={labelStyle}>주강사</label>
+              <select value={instructorId} onChange={(e) => setInstructorId(e.target.value)} style={inputStyle}>
+                <option value="">(미정)</option>
+                {activeInstructors.map(i => (
+                  <option key={i.id} value={i.id}>{i.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>보조강사 (선택)</label>
+              <select value={subInstructorId} onChange={(e) => setSubInstructorId(e.target.value)} style={inputStyle}>
+                <option value="">(없음)</option>
+                {activeInstructors.filter(i => String(i.id) !== instructorId).map(i => (
+                  <option key={i.id} value={i.id}>{i.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
+          {activeInstructors.length === 0 && (
+            <p style={{ fontSize: 11, color: '#888', margin: '-8px 0 12px' }}>
+              활동중인 강사가 없습니다. <Link href="/instructors" style={{ color: '#185FA5' }}>강사 등록</Link> 후 다시 시도하세요.
+            </p>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
             <div>
@@ -724,6 +738,11 @@ export default function CoursesClient() {
                   </td>
                   <td style={tdStyle}>
                     {c.instructor_id ? instructorMap.get(c.instructor_id) || '-' : '-'}
+                    {c.sub_instructor_id && (
+                      <span style={{ fontSize: 11, color: '#888', marginLeft: 4 }}>
+                        + {instructorMap.get(c.sub_instructor_id) || '-'}
+                      </span>
+                    )}
                   </td>
                   <td style={{ ...tdStyle, fontSize: 12 }}>{sessionsSummary(c)}</td>
                   <td style={tdStyle}>{c.classroom || '-'}</td>

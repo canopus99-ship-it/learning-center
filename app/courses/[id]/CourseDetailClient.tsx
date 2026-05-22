@@ -10,7 +10,7 @@ import { END_REASON_LABELS, END_REASON_COLORS } from '@/lib/payments';
 
 type Course = {
   id: number; category: string; name: string;
-  instructor_id: number | null; classroom: string | null; capacity: number;
+  instructor_id: number | null; sub_instructor_id: number | null; classroom: string | null; capacity: number;
   operation_type: string; operation_months: string | null;
   fee_jung_gu: number; fee_other: number;
   is_free: boolean; is_active: boolean; memo: string | null;
@@ -87,6 +87,7 @@ export default function CourseDetailClient({
   const [editCategory, setEditCategory] = useState(course.category);
   const [editName, setEditName] = useState(course.name);
   const [editInstructorId, setEditInstructorId] = useState<string>(course.instructor_id ? String(course.instructor_id) : '');
+  const [editSubInstructorId, setEditSubInstructorId] = useState<string>(course.sub_instructor_id ? String(course.sub_instructor_id) : '');
   const [editClassroom, setEditClassroom] = useState(course.classroom || '');
   const [editCapacity, setEditCapacity] = useState(String(course.capacity));
   const [editIsFree, setEditIsFree] = useState(course.is_free);
@@ -124,7 +125,7 @@ export default function CourseDetailClient({
   // (수강 종료 관련 state 제거됨 - 수강 종료는 수납관리 또는 회원관리에서 처리)
 
   const instructorMap = new Map(instructors.map(i => [i.id, i.name]));
-  const activeInstructors = instructors.filter(i => i.is_active || i.id === course.instructor_id);
+  const activeInstructors = instructors.filter(i => i.is_active || i.id === course.instructor_id || i.id === course.sub_instructor_id);
   const operationMonthsArr = course.operation_months ? course.operation_months.split(',').filter(Boolean).map(Number) : [];
 
   const activeCount = enrollments.filter(e => e.status === 'active' || e.status === 'paused').length;
@@ -155,6 +156,7 @@ export default function CourseDetailClient({
     const updated = {
       category: editCategory, name: editName.trim(),
       instructor_id: editInstructorId ? parseInt(editInstructorId, 10) : null,
+      sub_instructor_id: editSubInstructorId ? parseInt(editSubInstructorId, 10) : null,
       classroom: editClassroom || null,
       capacity: parseInt(editCapacity, 10) || 20,
       fee_jung_gu: editIsFree ? 0 : (parseInt(editFeeJungGu, 10) || 0),
@@ -173,6 +175,7 @@ export default function CourseDetailClient({
   function handleCancelBasic() {
     setEditCategory(course.category); setEditName(course.name);
     setEditInstructorId(course.instructor_id ? String(course.instructor_id) : '');
+    setEditSubInstructorId(course.sub_instructor_id ? String(course.sub_instructor_id) : '');
     setEditClassroom(course.classroom || ''); setEditCapacity(String(course.capacity));
     setEditIsFree(course.is_free); setEditFeeJungGu(String(course.fee_jung_gu));
     setEditFeeOther(String(course.fee_other)); setEditMemo(course.memo || '');
@@ -453,7 +456,8 @@ export default function CourseDetailClient({
         {!basicEditing ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, fontSize: 14 }}>
             <InfoRow label="강좌구분" value={course.category} />
-            <InfoRow label="강사" value={course.instructor_id ? instructorMap.get(course.instructor_id) || '-' : '미정'} />
+            <InfoRow label="주강사" value={course.instructor_id ? instructorMap.get(course.instructor_id) || '-' : '미정'} />
+            <InfoRow label="보조강사" value={course.sub_instructor_id ? instructorMap.get(course.sub_instructor_id) || '-' : '없음'} />
             <InfoRow label="강의실" value={course.classroom} />
             <InfoRow label="정원" value={`${course.capacity}명 (현재 ${activeCount}명)`} />
             <div style={{ gridColumn: 'span 2' }}>
@@ -480,14 +484,25 @@ export default function CourseDetailClient({
                 <input value={editName} onChange={(e) => setEditName(e.target.value)} style={inputStyle} />
               </div>
             </div>
-            <div style={{ marginBottom: 12 }}>
-              <label style={labelStyle}>강사</label>
-              <select value={editInstructorId} onChange={(e) => setEditInstructorId(e.target.value)} style={inputStyle}>
-                <option value="">(미정)</option>
-                {activeInstructors.map(i => (
-                  <option key={i.id} value={i.id}>{i.name}{!i.is_active && ' (비활동)'}</option>
-                ))}
-              </select>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
+              <div>
+                <label style={labelStyle}>주강사</label>
+                <select value={editInstructorId} onChange={(e) => setEditInstructorId(e.target.value)} style={inputStyle} aria-label="주강사">
+                  <option value="">(미정)</option>
+                  {activeInstructors.map(i => (
+                    <option key={i.id} value={i.id}>{i.name}{!i.is_active && ' (비활동)'}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>보조강사 (선택)</label>
+                <select value={editSubInstructorId} onChange={(e) => setEditSubInstructorId(e.target.value)} style={inputStyle} aria-label="보조강사">
+                  <option value="">(없음)</option>
+                  {activeInstructors.filter(i => String(i.id) !== editInstructorId).map(i => (
+                    <option key={i.id} value={i.id}>{i.name}{!i.is_active && ' (비활동)'}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
               <div>
