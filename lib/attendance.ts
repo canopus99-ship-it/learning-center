@@ -6,20 +6,12 @@
  * 특정 회원의 특정 수업 날짜에 출석체크 가능한지 확인
  *
  * 차단 조건:
- *   1. 휴강된 수업 (course_dates.is_cancelled = true)
- *   2. 환불일 이후 수업 (refund_date < class_date)
- *   3. 종료 예약된 월 이후 수업 (end_from_year/month 이후)
- *   4. 즉시 종료된 수강 (status = 'ended')
- *
- * @returns { canCheck: boolean, reason: string | null }
- */
-/**
- * 특정 회원의 특정 수업 날짜에 출석체크 가능한지 확인
- *
- * 차단 조건:
  *   1. 휴강된 수업
- *   2. 수강 종료된 회원 (enrollment.status === 'ended')
- *      - end_date 이후 수업도 차단 (종료일 다음날부터)
+ *   2. 수강 종료된 회원 (status === 'ended')
+ *      - 종료일(end_date) 당일부터 차단 (종료일 전날까지만 출석 가능)
+ *   3. 환불된 결제 (그 월 payment.refund_date 있음)
+ *      - 환불일 1~15일: 환불일 다음날부터 차단 (15일까지는 출석 가능)
+ *      - 환불일 16~말일: 그 월 말일까지 출석 가능 (다음달 첫날부터는 그 회원이 명단에서 빠지므로 자동 차단)
  */
 export function canCheckAttendance(
   enrollment: {
@@ -27,25 +19,41 @@ export function canCheckAttendance(
     end_date?: string | null;
   },
   classDate: string,        // 'YYYY-MM-DD'
-  isCancelled: boolean       // 휴강 여부
+  isCancelled: boolean,     // 휴강 여부
+  refundDate?: string | null  // 해당 월 결제의 환불일 (있으면)
 ): { canCheck: boolean; reason: string | null } {
   // 1. 휴강
   if (isCancelled) {
     return { canCheck: false, reason: '휴강된 수업입니다' };
   }
 
-  // 2. 수강 종료
+  // 2. 수강 종료 (종료일 당일부터 차단 → 종료일 전날까지만 출석 가능)
   if (enrollment.status === 'ended') {
-    // 종료일이 있고, 수업일이 종료일 당일까지면 출석 가능
-    if (enrollment.end_date && classDate <= enrollment.end_date) {
-      return { canCheck: true, reason: null };
+    if (enrollment.end_date && classDate < enrollment.end_date) {
+      // 종료일 전날까지는 출석 가능 (단, 환불 케이스 아래에서 추가 확인)
+    } else {
+      return {
+        canCheck: false,
+        reason: enrollment.end_date
+          ? `종료일(${enrollment.end_date})부터는 출석할 수 없습니다`
+          : '수강 종료된 회원입니다',
+      };
     }
-    return {
-      canCheck: false,
-      reason: enrollment.end_date
-        ? `종료일(${enrollment.end_date}) 이후 수업입니다`
-        : '수강 종료된 회원입니다',
-    };
+  }
+
+  // 3. 환불된 결제: 환불일 기준으로 출석 가능 범위 제한
+  if (refundDate) {
+    // 환불일의 일(day) 추출
+    const refundDay = parseInt(refundDate.substring(8, 10), 10);
+    if (refundDay <= 15) {
+      // 1~15일 환불: 1~15일 수업까지만 출석 가능
+      // 수업일의 일(day)로 비교 (같은 월 안에서만 비교, 다음달은 위에서 이미 명단에서 제외됨)
+      const classDay = parseInt(classDate.substring(8, 10), 10);
+      if (classDay > 15) {
+        return { canCheck: false, reason: `환불일(${refundDate}) 이후 수업입니다` };
+      }
+    }
+    // 16~말일 환불: 그 월 모든 수업 출석 가능 (다음달 자동 차단됨)
   }
 
   return { canCheck: true, reason: null };

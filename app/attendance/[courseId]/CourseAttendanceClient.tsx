@@ -70,6 +70,7 @@ type Payment = {
   payment_year: number;
   payment_month: number;
   is_paid: boolean;
+  refund_date: string | null;
 };
 
 export default function CourseAttendanceClient({
@@ -133,26 +134,22 @@ export default function CourseAttendanceClient({
   // 검색 필터 적용된 수강생 명단
   // 표시 규칙:
   //   1. 선택된 월에 결제 완료(is_paid=true)된 회원만 표시
-  //   2. 종료된 회원(ended)은 종료일이 속한 월까지만 표시 (이전 기록 확인용)
-  //      - 종료일이 5/20이면 5월까지는 보이고 6월부터는 안 보임
-  //   3. paused(일시중지)는 결제 있어도 그대로 표시
+  //   2. 환불된 결제도 환불일에 따라 그 월까지는 표시
+  //      - 환불일 1~15일: 그 월 표시 (16일 이후 수업은 출석 차단)
+  //      - 환불일 16~말일: 그 월 표시 (다음달부터 제외)
+  //   3. 종료된 회원(ended)은 종료일이 속한 월까지만 표시
+  //      - 종료일 다음날부터 출석 차단
+  //   4. paused(일시중지)는 결제 있으면 표시
   const allEnrollments = enrollments.filter(e => {
-    // 선택된 월의 마지막 날
-    const monthEnd = new Date(selectedYear, selectedMonth, 0); // 다음달 0일 = 이번달 말일
-    const monthEndStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
     const monthStartStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
 
-    // 종료된 회원: 종료일이 이번 달 이후일 때만 표시
+    // 종료된 회원: 종료일이 선택 월 첫째날보다 이후일 때만 표시
+    //   - 종료일이 6/1이면 6월 출석부에는 안 보임 (6/1 ≤ 6/1)
+    //   - 종료일이 5/20이면 5월 출석부에는 보임 (5/20 > 5/1)
     if (e.status === 'ended') {
       if (!e.end_date) return false;
-      // 종료일이 선택된 월의 첫째날보다 이르면 출석부에서 제외 (이미 종료된 다음달)
-      if (e.end_date < monthStartStr) return false;
-      // 종료일이 속한 월에는 표시 (그 월 결제 여부와 무관 - 이미 진행 중이었으니)
-      return true;
-    }
-
-    // active 또는 paused: 그 월에 결제된 경우만 표시
-    if (e.status === 'active' || e.status === 'paused') {
+      if (e.end_date <= monthStartStr) return false; // 종료일 ≤ 월 첫째날 → 제외
+      // 그 월에 결제 있어야 표시
       const hasPaidThisMonth = payments.some(p =>
         p.enrollment_id === e.id &&
         p.payment_year === selectedYear &&
@@ -160,6 +157,26 @@ export default function CourseAttendanceClient({
         p.is_paid
       );
       return hasPaidThisMonth;
+    }
+
+    // active 또는 paused: 그 월에 결제된 경우만 표시
+    if (e.status === 'active' || e.status === 'paused') {
+      const thisMonthPayment = payments.find(p =>
+        p.enrollment_id === e.id &&
+        p.payment_year === selectedYear &&
+        p.payment_month === selectedMonth &&
+        p.is_paid
+      );
+      if (!thisMonthPayment) return false;
+
+      // 환불된 결제: 환불일이 이번 달이 아니라 더 이전 달이면 제외
+      // (환불일이 이번 달이거나, 환불 안 됐거나, 환불일이 미래면 표시)
+      if (thisMonthPayment.refund_date) {
+        const refundDate = thisMonthPayment.refund_date;
+        // 환불일이 이번 달 첫째날보다 이전 → 이미 환불된 다음 달부터 제외
+        if (refundDate < monthStartStr) return false;
+      }
+      return true;
     }
 
     return false;
@@ -181,6 +198,19 @@ export default function CourseAttendanceClient({
     ) || null;
   }
 
+  // 특정 수업일이 속한 월의 결제 환불일 찾기
+  function getRefundDateForClass(enrollmentId: number, classDate: string): string | null {
+    const year = parseInt(classDate.substring(0, 4), 10);
+    const month = parseInt(classDate.substring(5, 7), 10);
+    const payment = payments.find(p =>
+      p.enrollment_id === enrollmentId &&
+      p.payment_year === year &&
+      p.payment_month === month &&
+      p.is_paid
+    );
+    return payment?.refund_date || null;
+  }
+
   async function reloadAttendance() {
     const { data } = await supabase
       .from('attendance')
@@ -193,8 +223,9 @@ export default function CourseAttendanceClient({
   async function toggleAttendance(enrollment: Enrollment, courseDate: CourseDate) {
     const memberName = enrollment.members?.name || '회원';
 
-    // 차단 조건 체크
-    const check = canCheckAttendance(enrollment, courseDate.class_date, courseDate.is_cancelled);
+    // 차단 조건 체크 (환불일 포함)
+    const refundDate = getRefundDateForClass(enrollment.id, courseDate.class_date);
+    const check = canCheckAttendance(enrollment, courseDate.class_date, courseDate.is_cancelled, refundDate);
     if (!check.canCheck) {
       alert(`${memberName}님은 출석체크할 수 없습니다.\n사유: ${check.reason}`);
       return;
@@ -398,7 +429,8 @@ export default function CourseAttendanceClient({
                 const member = e.members;
                 if (!member) return null;
                 const att = getAttendance(selectedDate.id, e.id);
-                const check = canCheckAttendance(e, selectedDate.class_date, selectedDate.is_cancelled);
+                const refundDate = getRefundDateForClass(e.id, selectedDate.class_date);
+                const check = canCheckAttendance(e, selectedDate.class_date, selectedDate.is_cancelled, refundDate);
                 const isPresent = !!att;
 
                 return (
@@ -450,7 +482,7 @@ export default function CourseAttendanceClient({
             background: '#FFF8E1', border: '1px solid #FFE082',
             borderRadius: 6, fontSize: 11, color: '#5D4037',
           }}>
-            💡 카드 클릭으로 출석 ✓ ↔ 결석 ○ 전환됩니다. 환불·종료된 회원은 출석체크 불가능합니다.
+            💡 카드 클릭으로 출석 ✓ ↔ 결석 ○ 전환됩니다. 종료·환불(15일 이전)된 회원은 출석체크가 차단됩니다.
           </div>
         </div>
       )}

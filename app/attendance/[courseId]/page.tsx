@@ -45,7 +45,7 @@ export default async function CourseAttendancePage({
     // 결제 데이터 (이 강좌의 enrollment에 해당하는 것만)
     supabase
       .from('payments')
-      .select('id, enrollment_id, payment_year, payment_month, is_paid'),
+      .select('id, enrollment_id, payment_year, payment_month, is_paid, refund_date'),
   ]);
 
   if (!courseRes.data) notFound();
