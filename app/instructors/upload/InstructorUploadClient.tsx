@@ -44,13 +44,14 @@ export default function InstructorUploadClient() {
       ['홍길동', '010-1234-5678', '시급', 37000, 1.5, '국민은행 123-456-789012', '인센티브 별도', ''],
       ['김선생', '010-2222-3333', '시급', 40000, 1, '신한은행 110-016-251920', '', '월요일 가곡교실'],
       ['이지도', '010-4444-5555', '일급', 80000, 1, '우리은행 1002-123-456789', '', ''],
+      ['박재능', '010-6666-7777', '시급', 0, 1, '', '재능기부', '무료 강의'],
     ];
     const note = [
       [],
       ['※ 입력 안내'],
       ['1. 이름은 필수입니다.'],
       ['2. 급여방식은 "시급" 또는 "일급"으로 정확히 입력해주세요.'],
-      ['3. 단가는 숫자만 입력 (예: 37000)'],
+      ['3. 단가는 숫자만 입력 (예: 37000). 재능기부 강사는 0으로 입력하세요.'],
       ['4. 1회당시간은 시간 단위 숫자 (예: 1, 1.5, 2)'],
       ['5. 일급의 경우 1회당시간은 1로 입력하거나 비워두면 됩니다.'],
       ['6. 이미 등록된 강사(이름+연락처 동일)는 자동으로 건너뜁니다.'],
@@ -133,10 +134,16 @@ export default function InstructorUploadClient() {
         payType = 'hourly';
       }
 
-      // 단가
-      const payAmount = parseInt(String(payAmountRaw).replace(/[^0-9]/g, ''), 10);
-      if (isNaN(payAmount) || payAmount <= 0) {
-        errors.push('단가가 올바르지 않습니다');
+      // 단가 (0원 허용 - 재능기부 강사)
+      const payAmountStr = String(payAmountRaw).trim();
+      let payAmount = 0;
+      if (payAmountStr === '' || payAmountStr === 'undefined') {
+        errors.push('단가를 입력해주세요 (재능기부는 0)');
+      } else {
+        payAmount = parseInt(payAmountStr.replace(/[^0-9]/g, ''), 10);
+        if (isNaN(payAmount) || payAmount < 0) {
+          errors.push('단가가 올바르지 않습니다');
+        }
       }
 
       // 1회당시간 (일급이면 무시되지만 일단 입력값 받음)
@@ -326,7 +333,7 @@ export default function InstructorUploadClient() {
                       <td style={td}>
                         {r.payType === 'hourly' ? '시급' : r.payType === 'daily' ? '일급' : '-'}
                       </td>
-                      <td style={td}>{r.payAmount ? r.payAmount.toLocaleString() + '원' : '-'}</td>
+                      <td style={td}>{r.payAmount === 0 ? '0원 (재능기부)' : r.payAmount > 0 ? r.payAmount.toLocaleString() + '원' : '-'}</td>
                       <td style={td}>{r.classHours}시간</td>
                       <td style={td} title={r.bankAccount}>
                         {r.bankAccount ? (r.bankAccount.length > 18 ? r.bankAccount.substring(0, 18) + '...' : r.bankAccount) : '-'}
