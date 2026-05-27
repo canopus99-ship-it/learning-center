@@ -178,6 +178,18 @@ export default function InstructorsClient() {
         }}>
           {showForm ? '닫기' : '+ 신규 강사 등록'}
         </button>
+        <Link href="/instructors/upload" style={{
+          padding: '10px 16px',
+          background: '#1D9E75',
+          color: 'white',
+          border: 'none',
+          borderRadius: 8,
+          cursor: 'pointer',
+          fontSize: 14,
+          textDecoration: 'none',
+        }}>
+          📤 엑셀 일괄 업로드
+        </Link>
         <button onClick={downloadInstructorsExcel} style={{
           padding: '10px 16px',
           background: '#7B3FBF',
