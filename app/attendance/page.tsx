@@ -11,6 +11,7 @@ type Course = {
   name: string;
   instructor_id: number | null;
   classroom: string | null;
+  is_lesson?: boolean;
 };
 
 type Instructor = { id: number; name: string };
@@ -75,14 +76,18 @@ export default async function AttendancePage() {
   const instructors = (instructorsRes.data || []) as Instructor[];
   const instructorMap = new Map(instructors.map(i => [i.id, i.name]));
 
-  // 오늘 수업 (권한 있는 강좌만)
+  // 오늘 수업 (권한 있는 강좌만, 레슨 강좌 제외)
   const allTodayDates = (todayDatesRes.data || []) as CourseDate[];
-  const courseIdSet = new Set(courses.map(c => c.id));
+  const courseIdSet = new Set(courses.filter(c => !c.is_lesson).map(c => c.id));
   const todayDates = allTodayDates.filter(d => courseIdSet.has(d.course_id));
 
-  // 카테고리별 강좌 그룹핑
+  // 일반 강좌 vs 레슨 강좌 분리
+  const normalCourses = courses.filter(c => !c.is_lesson);
+  const lessonCourses = courses.filter(c => c.is_lesson);
+
+  // 카테고리별 강좌 그룹핑 (일반 강좌만)
   const coursesByCategory = CATEGORIES.reduce<Record<string, Course[]>>((acc, cat) => {
-    acc[cat] = courses.filter(c => c.category === cat);
+    acc[cat] = normalCourses.filter(c => c.category === cat);
     return acc;
   }, {});
 
@@ -142,14 +147,14 @@ export default async function AttendancePage() {
         {/* 전체 강좌 */}
         <div style={{ background: 'white', borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
           <h2 style={{ fontSize: 15, margin: '0 0 16px' }}>
-            📚 전체 강좌 ({courses.length}개)
+            📚 일반 강좌 ({normalCourses.length}개)
           </h2>
 
-          {courses.length === 0 ? (
+          {normalCourses.length === 0 ? (
             <p style={{ color: '#888', fontSize: 13, padding: 20, textAlign: 'center' }}>
               {staff.role === 'tablet'
                 ? '⚠️ 이 태블릿에 할당된 강좌가 없습니다. 관리자에게 문의하세요.'
-                : '운영 중인 강좌가 없습니다.'}
+                : '운영 중인 일반 강좌가 없습니다.'}
             </p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -198,6 +203,49 @@ export default async function AttendancePage() {
             </div>
           )}
         </div>
+
+        {/* 레슨 강좌 */}
+        {lessonCourses.length > 0 && (
+          <div style={{ background: 'white', borderRadius: 12, padding: 20, marginTop: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
+            <h2 style={{ fontSize: 15, margin: '0 0 4px', color: '#7B3FBF' }}>
+              📅 레슨 강좌 ({lessonCourses.length}개)
+            </h2>
+            <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>
+              개인별 스케줄 관리가 필요한 강좌 (피아노교실 등)
+            </p>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+              gap: 8,
+            }}>
+              {lessonCourses.map(course => (
+                <Link
+                  key={course.id}
+                  href={`/attendance/lesson/${course.id}`}
+                  style={{ textDecoration: 'none', color: 'inherit' }}
+                >
+                  <div style={{
+                    background: '#F8F4FF',
+                    border: '1px solid #D6BFFF',
+                    borderRadius: 8, padding: 12,
+                    cursor: 'pointer',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 13 }}>{course.name}</strong>
+                      <span style={{ ...badgeStyle(CATEGORY_COLORS[course.category] || '#666'), fontSize: 10 }}>
+                        {course.category}
+                      </span>
+                    </div>
+                    <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>
+                      {course.classroom && `📍 ${course.classroom}`}
+                      {course.instructor_id && ` · ${instructorMap.get(course.instructor_id) || '-'}`}
+                    </p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

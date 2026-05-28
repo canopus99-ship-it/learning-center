@@ -438,6 +438,13 @@ export default function CoursesClient() {
             </div>
           </div>
 
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={isLesson} onChange={(e) => setIsLesson(e.target.checked)} />
+              <span>📅 <strong>레슨 강좌</strong> (개인별 스케줄 관리 - 피아노교실 등)</span>
+            </label>
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
             <div>
               <label style={labelStyle}>주강사</label>
@@ -732,7 +739,14 @@ export default function CoursesClient() {
                   onMouseEnter={(e) => e.currentTarget.style.background = '#f9f9f9'}
                   onMouseLeave={(e) => e.currentTarget.style.background = ''}
                 >
-                  <td style={tdStyle}><strong>{c.name}</strong></td>
+                  <td style={tdStyle}>
+                    <strong>{c.name}</strong>
+                    {c.is_lesson && (
+                      <span style={{ marginLeft: 6, fontSize: 10, padding: '2px 6px', borderRadius: 3, background: '#7B3FBF', color: 'white' }}>
+                        레슨
+                      </span>
+                    )}
+                  </td>
                   <td style={tdStyle}>
                     <span style={badgeStyle(CATEGORY_COLORS[c.category] || '#666')}>{c.category}</span>
                   </td>

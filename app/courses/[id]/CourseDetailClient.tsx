@@ -11,6 +11,7 @@ import { END_REASON_LABELS, END_REASON_COLORS } from '@/lib/payments';
 type Course = {
   id: number; category: string; name: string;
   instructor_id: number | null; sub_instructor_id: number | null; classroom: string | null; capacity: number;
+  is_lesson?: boolean;
   operation_type: string; operation_months: string | null;
   fee_jung_gu: number; fee_other: number;
   is_free: boolean; is_active: boolean; memo: string | null;
@@ -88,6 +89,7 @@ export default function CourseDetailClient({
   const [editName, setEditName] = useState(course.name);
   const [editInstructorId, setEditInstructorId] = useState<string>(course.instructor_id ? String(course.instructor_id) : '');
   const [editSubInstructorId, setEditSubInstructorId] = useState<string>(course.sub_instructor_id ? String(course.sub_instructor_id) : '');
+  const [editIsLesson, setEditIsLesson] = useState<boolean>(!!course.is_lesson);
   const [editClassroom, setEditClassroom] = useState(course.classroom || '');
   const [editCapacity, setEditCapacity] = useState(String(course.capacity));
   const [editIsFree, setEditIsFree] = useState(course.is_free);
@@ -157,6 +159,7 @@ export default function CourseDetailClient({
       category: editCategory, name: editName.trim(),
       instructor_id: editInstructorId ? parseInt(editInstructorId, 10) : null,
       sub_instructor_id: editSubInstructorId ? parseInt(editSubInstructorId, 10) : null,
+      is_lesson: editIsLesson,
       classroom: editClassroom || null,
       capacity: parseInt(editCapacity, 10) || 20,
       fee_jung_gu: editIsFree ? 0 : (parseInt(editFeeJungGu, 10) || 0),
@@ -176,6 +179,7 @@ export default function CourseDetailClient({
     setEditCategory(course.category); setEditName(course.name);
     setEditInstructorId(course.instructor_id ? String(course.instructor_id) : '');
     setEditSubInstructorId(course.sub_instructor_id ? String(course.sub_instructor_id) : '');
+    setEditIsLesson(!!course.is_lesson);
     setEditClassroom(course.classroom || ''); setEditCapacity(String(course.capacity));
     setEditIsFree(course.is_free); setEditFeeJungGu(String(course.fee_jung_gu));
     setEditFeeOther(String(course.fee_other)); setEditMemo(course.memo || '');
@@ -430,6 +434,9 @@ export default function CourseDetailClient({
       <h1 style={{ fontSize: 22, marginTop: 12, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {course.name}
         <span style={{ ...badgeStyle(CATEGORY_COLORS[course.category] || '#666'), fontSize: 12 }}>{course.category}</span>
+        {course.is_lesson && (
+          <span style={{ fontSize: 11, padding: '3px 10px', background: '#7B3FBF', color: 'white', borderRadius: 4, fontWeight: 'normal' }}>📅 레슨</span>
+        )}
         {!course.is_active && (
           <span style={{ fontSize: 11, padding: '3px 10px', background: '#eee', color: '#888', borderRadius: 4, fontWeight: 'normal' }}>종료</span>
         )}
@@ -483,6 +490,12 @@ export default function CourseDetailClient({
                 <label style={labelStyle}>강좌명 *</label>
                 <input value={editName} onChange={(e) => setEditName(e.target.value)} style={inputStyle} />
               </div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={editIsLesson} onChange={(e) => setEditIsLesson(e.target.checked)} />
+                <span>📅 <strong>레슨 강좌</strong> (개인별 스케줄 관리 - 피아노교실 등)</span>
+              </label>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
               <div>
@@ -711,18 +724,9 @@ export default function CourseDetailClient({
             수강생 명단 (수강중 {activeList.length}명 / 대기 {waitingList.length}명)
             {isFull && <span style={{ marginLeft: 8, fontSize: 11, padding: '2px 8px', background: '#A32D2D', color: 'white', borderRadius: 4 }}>정원 마감</span>}
           </h2>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <Link href={`/courses/${course.id}/enroll-upload`} style={{
-              padding: '8px 14px', fontSize: 13, borderRadius: 6,
-              background: '#1D9E75', color: 'white',
-              border: 'none', textDecoration: 'none', fontWeight: 500,
-            }}>
-              📤 엑셀 일괄 업로드
-            </Link>
-            <button onClick={() => setShowEnrollForm(!showEnrollForm)} style={primaryBtnStyle}>
-              {showEnrollForm ? '닫기' : '+ 수강신청 받기'}
-            </button>
-          </div>
+          <button onClick={() => setShowEnrollForm(!showEnrollForm)} style={primaryBtnStyle}>
+            {showEnrollForm ? '닫기' : '+ 수강신청 받기'}
+          </button>
         </div>
 
         {showEnrollForm && (
