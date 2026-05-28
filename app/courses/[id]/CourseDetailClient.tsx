@@ -48,6 +48,7 @@ type Enrollment = {
   refund_date: string | null;
   refund_memo: string | null;
   memo: string | null;
+  course_level_id?: number | null;
   members: MemberInEnrollment | null;
 };
 
@@ -144,6 +145,7 @@ export default function CourseDetailClient({
   // 수강신청 추가
   const [showEnrollForm, setShowEnrollForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedLevelId, setSelectedLevelId] = useState<string>(''); // 등급 강좌용
   const [searchResults, setSearchResults] = useState<MemberSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
 
@@ -446,6 +448,13 @@ export default function CourseDetailClient({
   }
 
   async function handleEnroll(memberId: number, memberName: string) {
+    // 등급 강좌면 등급 선택 필수
+    if (course.use_levels && !selectedLevelId) {
+      alert('등급을 먼저 선택해주세요.');
+      return;
+    }
+    const courseLevelId = selectedLevelId ? parseInt(selectedLevelId, 10) : null;
+
     if (enrolledMemberIds.has(memberId)) {
       const existing = enrollments.find(e => e.member_id === memberId);
       if (existing?.status === 'ended') {
@@ -456,6 +465,7 @@ export default function CourseDetailClient({
           status, waiting_order: waitingOrder,
           enrolled_at: new Date().toISOString(), ended_at: null,
           end_reason: null, refund_date: null, refund_memo: null,
+          ...(course.use_levels ? { course_level_id: courseLevelId } : {}),
         }).eq('id', existing.id);
         alert(`${memberName}님이 ${status === 'waiting' ? '대기 명단에 추가' : '수강신청'}되었습니다!`);
         reloadEnrollments();
@@ -468,9 +478,13 @@ export default function CourseDetailClient({
 
     const status = isFull ? 'waiting' : 'active';
     const waitingOrder = status === 'waiting' ? (waitingList.length + 1) : null;
-    const { error } = await supabase.from('enrollments').insert([{
+    const newEnrollment: any = {
       member_id: memberId, course_id: course.id, status, waiting_order: waitingOrder,
-    }]);
+    };
+    if (course.use_levels) {
+      newEnrollment.course_level_id = courseLevelId;
+    }
+    const { error } = await supabase.from('enrollments').insert([newEnrollment]);
     if (error) alert('수강신청 실패: ' + error.message);
     else {
       alert(`${memberName}님이 ${status === 'waiting' ? `대기 ${waitingOrder}순위에 추가` : '수강신청'}되었습니다!`);
@@ -921,6 +935,53 @@ export default function CourseDetailClient({
         {showEnrollForm && (
           <div style={{ background: '#f9f9f9', padding: 16, borderRadius: 8, marginBottom: 16, border: '1px solid #eee' }}>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 8px' }}>회원을 검색해서 수강신청을 추가하세요</p>
+
+            {course.use_levels && (
+              <div style={{
+                marginBottom: 12, padding: 12,
+                background: levels.length === 0 ? '#FFF5F5' : '#F8F4FF',
+                border: levels.length === 0 ? '1px solid #FECACA' : '1px solid #D6BFFF',
+                borderRadius: 8,
+              }}>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#7B3FBF' }}>
+                  📊 등급 선택 (필수)
+                </label>
+                {levels.length === 0 ? (
+                  <p style={{ fontSize: 12, color: '#A32D2D', margin: 0 }}>
+                    이 강좌의 등급이 등록되지 않았습니다. 위쪽 강좌 정보 수정에서 등급을 먼저 등록해주세요.
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {levels.map(lv => (
+                      <label
+                        key={lv.id}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                          padding: '6px 12px', borderRadius: 6, cursor: 'pointer',
+                          background: selectedLevelId === String(lv.id) ? '#7B3FBF' : 'white',
+                          color: selectedLevelId === String(lv.id) ? 'white' : '#333',
+                          border: '1px solid ' + (selectedLevelId === String(lv.id) ? '#7B3FBF' : '#ddd'),
+                          fontSize: 13,
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="levelSelect"
+                          checked={selectedLevelId === String(lv.id)}
+                          onChange={() => setSelectedLevelId(String(lv.id))}
+                          style={{ display: 'none' }}
+                        />
+                        <strong>{lv.level_name}</strong>
+                        <span style={{ fontSize: 11, opacity: 0.85 }}>
+                          ({lv.fee_jung_gu.toLocaleString()}/{lv.fee_other.toLocaleString()}원)
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearchMember()} placeholder="이름 또는 연락처로 검색" style={{ flex: 1, ...inputStyle }} />
               <button onClick={handleSearchMember} style={primaryBtnStyle}>검색</button>
@@ -972,28 +1033,43 @@ export default function CourseDetailClient({
                 <th style={thStyle}>이름</th>
                 <th style={thStyle}>연락처</th>
                 <th style={thStyle}>거주구분</th>
+                {course.use_levels && <th style={thStyle}>등급</th>}
                 <th style={thStyle}>상태</th>
                 <th style={thStyle}>신청일</th>
                 <th style={thStyle}>관리</th>
               </tr>
             </thead>
             <tbody>
-              {activeList.map((e) => (
-                <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                  <td style={tdStyle}>
-                    <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
-                      <strong>{e.members?.name}</strong>
-                    </Link>
-                  </td>
-                  <td style={tdStyle}>{e.members?.phone || '-'}</td>
-                  <td style={tdStyle}>{e.members?.region_type || '-'}</td>
-                  <td style={tdStyle}><span style={badgeStyle(STATUS_COLORS[e.status])}>{STATUS_LABELS[e.status]}</span></td>
-                  <td style={tdStyle}>{e.enrolled_at?.substring(0, 10)}</td>
-                  <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                    <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>수강신청 취소</button>
-                  </td>
-                </tr>
-              ))}
+              {activeList.map((e) => {
+                const levelName = e.course_level_id ? (levels.find(lv => lv.id === e.course_level_id)?.level_name || '-') : '-';
+                return (
+                  <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                    <td style={tdStyle}>
+                      <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
+                        <strong>{e.members?.name}</strong>
+                      </Link>
+                    </td>
+                    <td style={tdStyle}>{e.members?.phone || '-'}</td>
+                    <td style={tdStyle}>{e.members?.region_type || '-'}</td>
+                    {course.use_levels && (
+                      <td style={tdStyle}>
+                        {e.course_level_id ? (
+                          <span style={{ fontSize: 11, padding: '2px 8px', background: '#7B3FBF', color: 'white', borderRadius: 4 }}>
+                            {levelName}
+                          </span>
+                        ) : (
+                          <span style={{ color: '#A32D2D', fontSize: 11 }}>⚠ 미선택</span>
+                        )}
+                      </td>
+                    )}
+                    <td style={tdStyle}><span style={badgeStyle(STATUS_COLORS[e.status])}>{STATUS_LABELS[e.status]}</span></td>
+                    <td style={tdStyle}>{e.enrolled_at?.substring(0, 10)}</td>
+                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                      <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>수강신청 취소</button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
