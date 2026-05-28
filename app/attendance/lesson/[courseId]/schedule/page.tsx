@@ -21,14 +21,22 @@ export default async function LessonSchedulePage({ params }: { params: { courseI
   if (!course.is_lesson) redirect(`/attendance/${courseId}`);
 
   // 이 강좌의 수강생 (enrollment + member)
-  const { data: enrollments } = await supabase
+  const { data: enrollmentsRaw } = await supabase
     .from('enrollments')
     .select('id, member_id, status, members(id, name, phone)')
     .eq('course_id', courseId)
     .in('status', ['active', 'paused']);
 
+  // Supabase 관계 조회는 members를 배열로 반환할 수 있어 단일 객체로 정규화
+  const enrollments = (enrollmentsRaw || []).map((e: any) => ({
+    id: e.id,
+    member_id: e.member_id,
+    status: e.status,
+    members: Array.isArray(e.members) ? (e.members[0] || null) : (e.members || null),
+  }));
+
   // 결제 데이터 (결제 완료자 판단용)
-  const enrollmentIds = (enrollments || []).map(e => e.id);
+  const enrollmentIds = enrollments.map(e => e.id);
   let payments: any[] = [];
   if (enrollmentIds.length > 0) {
     const { data: payData } = await supabase
@@ -42,8 +50,8 @@ export default async function LessonSchedulePage({ params }: { params: { courseI
     <div>
       <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
       <LessonScheduleClient
-        course={course}
-        enrollments={enrollments || []}
+        course={course as any}
+        enrollments={enrollments as any}
         payments={payments}
       />
     </div>
