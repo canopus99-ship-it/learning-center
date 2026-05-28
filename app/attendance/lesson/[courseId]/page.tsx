@@ -41,23 +41,25 @@ export default async function LessonAttendancePage({ params }: { params: { cours
           gap: 12,
           marginBottom: 24,
         }}>
-          <div style={{
-            background: '#F8F4FF', border: '2px solid #D6BFFF',
-            borderRadius: 12, padding: 24, textAlign: 'center',
-          }}>
-            <div style={{ fontSize: 36, marginBottom: 8 }}>📅</div>
-            <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>스케줄 등록</h3>
-            <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>
-              월별 캘린더에서 수강생 레슨 시간을 등록합니다
-            </p>
-            <span style={{
-              display: 'inline-block', padding: '6px 12px',
-              background: '#ccc', color: 'white', borderRadius: 6,
-              fontSize: 12,
+          <Link href={`/attendance/lesson/${course.id}/schedule`} style={{ textDecoration: 'none', color: 'inherit' }}>
+            <div style={{
+              background: '#F8F4FF', border: '2px solid #D6BFFF',
+              borderRadius: 12, padding: 24, textAlign: 'center', cursor: 'pointer',
             }}>
-              🚧 준비 중 (C단계)
-            </span>
-          </div>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>📅</div>
+              <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>스케줄 등록</h3>
+              <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>
+                월별 캘린더에서 수강생 레슨 시간을 등록합니다
+              </p>
+              <span style={{
+                display: 'inline-block', padding: '6px 12px',
+                background: '#7B3FBF', color: 'white', borderRadius: 6,
+                fontSize: 12, fontWeight: 500,
+              }}>
+                스케줄 관리 →
+              </span>
+            </div>
+          </Link>
 
           <div style={{
             background: '#E6F1FB', border: '2px solid #B5D4F4',
@@ -84,7 +86,7 @@ export default async function LessonAttendancePage({ params }: { params: { cours
           borderRadius: 8, fontSize: 13, color: '#5D4037', lineHeight: 1.6,
         }}>
           <strong>💡 안내</strong><br />
-          이 페이지는 A·B단계까지 완성된 상태입니다. 스케줄 등록과 출석 체크 기능은 C·D단계에서 추가됩니다.
+          스케줄 등록에서 수강생별 레슨 시간을 캘린더에 등록할 수 있습니다. 출석 체크 기능은 다음 단계(D)에서 추가됩니다.
         </div>
       </div>
     </div>
