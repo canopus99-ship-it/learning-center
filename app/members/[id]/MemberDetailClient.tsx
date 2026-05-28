@@ -50,6 +50,7 @@ type CourseInEnrollment = {
   classroom: string | null;
   capacity: number;
   is_active: boolean;
+  use_levels?: boolean;
 };
 
 type Enrollment = {
@@ -65,6 +66,7 @@ type Enrollment = {
   refund_date: string | null;
   refund_memo: string | null;
   memo: string | null;
+  course_level_id?: number | null;
   courses: CourseInEnrollment | null;
 };
 
@@ -75,6 +77,16 @@ type CourseSearchResult = {
   classroom: string | null;
   capacity: number;
   is_active: boolean;
+  use_levels?: boolean;
+};
+
+type CourseLevel = {
+  id: number;
+  course_id: number;
+  level_name: string;
+  fee_jung_gu: number;
+  fee_other: number;
+  sort_order: number;
 };
 
 const CATEGORIES = [
@@ -93,11 +105,13 @@ export default function MemberDetailClient({
   member: initialMember,
   staffName,
   initialEnrollments,
+  allLevels,
 }: {
   member: Member;
   staffName: string;
   staffEmail: string;
   initialEnrollments: Enrollment[];
+  allLevels: CourseLevel[];
 }) {
   const supabase = createClient();
   const router = useRouter();
@@ -168,6 +182,8 @@ export default function MemberDetailClient({
   const [courseSearchQuery, setCourseSearchQuery] = useState('');
   const [courseSearchResults, setCourseSearchResults] = useState<CourseSearchResult[]>([]);
   const [courseSearching, setCourseSearching] = useState(false);
+  // 등급 강좌의 선택된 등급 ID 매핑 (course_id → level_id)
+  const [selectedLevels, setSelectedLevels] = useState<Map<number, number>>(new Map());
 
   useEffect(() => {
     loadMemos();
@@ -351,7 +367,7 @@ export default function MemberDetailClient({
 
     const { data, error } = await supabase
       .from('courses')
-      .select('id, name, category, classroom, capacity, is_active')
+      .select('id, name, category, classroom, capacity, is_active, use_levels')
       .ilike('name', `%${courseSearchQuery.trim()}%`)
       .eq('is_active', true)
       .limit(20);
@@ -366,6 +382,25 @@ export default function MemberDetailClient({
   }
 
   async function handleEnrollCourse(courseId: number, courseName: string) {
+    // 강좌 정보 조회 (등급 사용 여부 확인)
+    const { data: courseInfo } = await supabase
+      .from('courses')
+      .select('capacity, use_levels')
+      .eq('id', courseId)
+      .single();
+    const useLevels = !!courseInfo?.use_levels;
+
+    // 등급 강좌면 등급 선택 필수
+    let courseLevelId: number | null = null;
+    if (useLevels) {
+      const selectedLevel = selectedLevels.get(courseId);
+      if (!selectedLevel) {
+        alert(`${courseName}은 등급별 수강료 강좌입니다. 등급을 먼저 선택해주세요.`);
+        return;
+      }
+      courseLevelId = selectedLevel;
+    }
+
     // 이미 등록된 강좌인지 확인
     const existing = enrollments.find(e => e.course_id === courseId);
     if (existing && existing.status !== 'ended') {
@@ -382,8 +417,7 @@ export default function MemberDetailClient({
     const activeCount = (courseEnrollments || []).filter(e => e.status === 'active' || e.status === 'paused').length;
     const waitingCount = (courseEnrollments || []).filter(e => e.status === 'waiting').length;
 
-    const { data: courseData } = await supabase.from('courses').select('capacity').eq('id', courseId).single();
-    const capacity = courseData?.capacity || 20;
+    const capacity = courseInfo?.capacity || 20;
     const isFull = activeCount >= capacity;
 
     if (existing && existing.status === 'ended') {
@@ -393,14 +427,17 @@ export default function MemberDetailClient({
       const status = isFull ? 'waiting' : 'active';
       const waitingOrder = status === 'waiting' ? (waitingCount + 1) : null;
 
+      const updateData: any = {
+        status,
+        waiting_order: waitingOrder,
+        enrolled_at: new Date().toISOString(),
+        ended_at: null,
+      };
+      if (useLevels) updateData.course_level_id = courseLevelId;
+
       const { error } = await supabase
         .from('enrollments')
-        .update({
-          status,
-          waiting_order: waitingOrder,
-          enrolled_at: new Date().toISOString(),
-          ended_at: null,
-        })
+        .update(updateData)
         .eq('id', existing.id);
 
       if (error) {
@@ -415,12 +452,15 @@ export default function MemberDetailClient({
     const status = isFull ? 'waiting' : 'active';
     const waitingOrder = status === 'waiting' ? (waitingCount + 1) : null;
 
-    const { error } = await supabase.from('enrollments').insert([{
+    const insertData: any = {
       member_id: member.id,
       course_id: courseId,
       status,
       waiting_order: waitingOrder,
-    }]);
+    };
+    if (useLevels) insertData.course_level_id = courseLevelId;
+
+    const { error } = await supabase.from('enrollments').insert([insertData]);
 
     if (error) {
       alert('수강신청 실패: ' + error.message);
@@ -731,32 +771,94 @@ export default function MemberDetailClient({
             {courseSearching ? (
               <p style={{ fontSize: 13, color: '#888' }}>검색 중...</p>
             ) : courseSearchResults.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto' }}>
                 {courseSearchResults.map((c) => {
                   const existing = enrollments.find(e => e.course_id === c.id);
                   const alreadyActive = existing && existing.status !== 'ended';
+                  const courseLevels = allLevels.filter(lv => lv.course_id === c.id);
+                  const isLevelCourse = !!c.use_levels;
+                  const selectedLevelId = selectedLevels.get(c.id);
                   return (
                     <div key={c.id} style={{
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                       padding: 10, background: 'white', borderRadius: 6, border: '1px solid #eee',
                     }}>
-                      <div>
-                        <strong style={{ fontSize: 14 }}>{c.name}</strong>
-                        <span style={{ ...badgeStyle(COURSE_CATEGORY_COLORS[c.category] || '#666'), marginLeft: 8 }}>{c.category}</span>
-                        <span style={{ fontSize: 12, color: '#666', marginLeft: 8 }}>{c.classroom || '-'} · 정원 {c.capacity}명</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <strong style={{ fontSize: 14 }}>{c.name}</strong>
+                          <span style={{ ...badgeStyle(COURSE_CATEGORY_COLORS[c.category] || '#666'), marginLeft: 8 }}>{c.category}</span>
+                          {isLevelCourse && (
+                            <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, background: '#7B3FBF', color: 'white', marginLeft: 6 }}>
+                              📊 등급별
+                            </span>
+                          )}
+                          <span style={{ fontSize: 12, color: '#666', marginLeft: 8 }}>{c.classroom || '-'} · 정원 {c.capacity}명</span>
+                        </div>
+                        {alreadyActive ? (
+                          <span style={{ fontSize: 12, color: '#888' }}>이미 등록됨 ({STATUS_LABELS[existing!.status]})</span>
+                        ) : (
+                          <button
+                            onClick={() => handleEnrollCourse(c.id, c.name)}
+                            disabled={isLevelCourse && !selectedLevelId}
+                            style={{
+                              padding: '6px 14px',
+                              background: (isLevelCourse && !selectedLevelId) ? '#ccc' : '#185FA5',
+                              color: 'white',
+                              border: 'none', borderRadius: 4,
+                              cursor: (isLevelCourse && !selectedLevelId) ? 'not-allowed' : 'pointer',
+                              fontSize: 12,
+                            }}
+                          >
+                            {existing ? '재신청' : '수강신청'}
+                          </button>
+                        )}
                       </div>
-                      {alreadyActive ? (
-                        <span style={{ fontSize: 12, color: '#888' }}>이미 등록됨 ({STATUS_LABELS[existing!.status]})</span>
-                      ) : (
-                        <button
-                          onClick={() => handleEnrollCourse(c.id, c.name)}
-                          style={{
-                            padding: '6px 14px', background: '#185FA5', color: 'white',
-                            border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12,
-                          }}
-                        >
-                          {existing ? '재신청' : '수강신청'}
-                        </button>
+
+                      {/* 등급 선택 (등급 강좌만) */}
+                      {isLevelCourse && !alreadyActive && (
+                        <div style={{
+                          marginTop: 8, padding: 8,
+                          background: courseLevels.length === 0 ? '#FFF5F5' : '#F8F4FF',
+                          borderRadius: 6,
+                        }}>
+                          {courseLevels.length === 0 ? (
+                            <p style={{ fontSize: 11, color: '#A32D2D', margin: 0 }}>
+                              ⚠ 이 강좌의 등급이 등록되지 않았습니다. 강좌 관리에서 먼저 등록하세요.
+                            </p>
+                          ) : (
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                              <span style={{ fontSize: 11, color: '#7B3FBF', marginRight: 4 }}>등급:</span>
+                              {courseLevels.map(lv => (
+                                <label
+                                  key={lv.id}
+                                  style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                                    padding: '4px 8px', borderRadius: 4, cursor: 'pointer',
+                                    background: selectedLevelId === lv.id ? '#7B3FBF' : 'white',
+                                    color: selectedLevelId === lv.id ? 'white' : '#333',
+                                    border: '1px solid ' + (selectedLevelId === lv.id ? '#7B3FBF' : '#ddd'),
+                                    fontSize: 11,
+                                  }}
+                                >
+                                  <input
+                                    type="radio"
+                                    name={`level_${c.id}`}
+                                    checked={selectedLevelId === lv.id}
+                                    onChange={() => {
+                                      const next = new Map(selectedLevels);
+                                      next.set(c.id, lv.id);
+                                      setSelectedLevels(next);
+                                    }}
+                                    style={{ display: 'none' }}
+                                  />
+                                  <strong>{lv.level_name}</strong>
+                                  <span style={{ fontSize: 10, opacity: 0.85 }}>
+                                    ({lv.fee_jung_gu.toLocaleString()}/{lv.fee_other.toLocaleString()})
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
