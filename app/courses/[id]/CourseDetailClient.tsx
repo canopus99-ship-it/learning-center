@@ -12,9 +12,19 @@ type Course = {
   id: number; category: string; name: string;
   instructor_id: number | null; sub_instructor_id: number | null; classroom: string | null; capacity: number;
   is_lesson?: boolean;
+  use_levels?: boolean;
   operation_type: string; operation_months: string | null;
   fee_jung_gu: number; fee_other: number;
   is_free: boolean; is_active: boolean; memo: string | null;
+};
+
+type CourseLevel = {
+  id: number;
+  course_id: number;
+  level_name: string;
+  fee_jung_gu: number;
+  fee_other: number;
+  sort_order: number;
 };
 
 type Session = {
@@ -68,17 +78,20 @@ export default function CourseDetailClient({
   sessions: initialSessions,
   instructors,
   initialEnrollments,
+  initialLevels,
 }: {
   course: Course;
   sessions: Session[];
   instructors: Instructor[];
   initialEnrollments: Enrollment[];
+  initialLevels: CourseLevel[];
 }) {
   const supabase = createClient();
   const router = useRouter();
   const [course, setCourse] = useState<Course>(initialCourse);
   const [sessions, setSessions] = useState<Session[]>(initialSessions);
   const [enrollments, setEnrollments] = useState<Enrollment[]>(initialEnrollments);
+  const [levels] = useState<CourseLevel[]>(initialLevels);
 
   // 수정 모드
   const [basicEditing, setBasicEditing] = useState(false);
@@ -470,7 +483,32 @@ export default function CourseDetailClient({
             <div style={{ gridColumn: 'span 2' }}>
               <label style={labelStyle}>수강료</label>
               <div style={{ fontSize: 14, marginTop: 2 }}>
-                {course.is_free ? (<span style={badgeStyle('#1D9E75')}>무료</span>) : (
+                {course.is_free ? (
+                  <span style={badgeStyle('#1D9E75')}>무료</span>
+                ) : course.use_levels ? (
+                  levels.length > 0 ? (
+                    <table style={{ borderCollapse: 'collapse', fontSize: 13, marginTop: 4 }}>
+                      <thead>
+                        <tr style={{ background: '#F8F4FF' }}>
+                          <th style={{ padding: '4px 12px', textAlign: 'left', border: '1px solid #E0D0F5' }}>등급</th>
+                          <th style={{ padding: '4px 12px', textAlign: 'right', border: '1px solid #E0D0F5' }}>중구민</th>
+                          <th style={{ padding: '4px 12px', textAlign: 'right', border: '1px solid #E0D0F5' }}>타구민</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {levels.map(lv => (
+                          <tr key={lv.id}>
+                            <td style={{ padding: '4px 12px', border: '1px solid #eee', fontWeight: 500 }}>{lv.level_name}</td>
+                            <td style={{ padding: '4px 12px', border: '1px solid #eee', textAlign: 'right' }}>{lv.fee_jung_gu.toLocaleString()}원</td>
+                            <td style={{ padding: '4px 12px', border: '1px solid #eee', textAlign: 'right' }}>{lv.fee_other.toLocaleString()}원</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <span style={{ color: '#A32D2D', fontSize: 13 }}>📊 등급별 강좌이나 등급이 등록되지 않았습니다. 수정에서 등급을 추가하세요.</span>
+                  )
+                ) : (
                   <span>중구민 <strong>{course.fee_jung_gu.toLocaleString()}원</strong> / 타구민 <strong>{course.fee_other.toLocaleString()}원</strong></span>
                 )}
               </div>

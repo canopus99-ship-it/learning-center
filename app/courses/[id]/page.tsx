@@ -24,7 +24,7 @@ export default async function CourseDetailPage({
 
   const supabase = await createClient();
 
-  const [courseRes, sessionsRes, instructorsRes, enrollmentsRes] = await Promise.all([
+  const [courseRes, sessionsRes, instructorsRes, enrollmentsRes, levelsRes] = await Promise.all([
     supabase.from('courses').select('*').eq('id', courseId).maybeSingle(),
     supabase.from('course_sessions').select('*').eq('course_id', courseId),
     supabase.from('instructors').select('id, name, is_active').order('name'),
@@ -32,6 +32,7 @@ export default async function CourseDetailPage({
       .from('enrollments')
       .select('*, members(id, name, phone, birth_date, region_type)')
       .eq('course_id', courseId),
+    supabase.from('course_levels').select('*').eq('course_id', courseId).order('sort_order'),
   ]);
 
   if (courseRes.error || !courseRes.data) {
@@ -46,6 +47,7 @@ export default async function CourseDetailPage({
         sessions={sessionsRes.data || []}
         instructors={instructorsRes.data || []}
         initialEnrollments={enrollmentsRes.data || []}
+        initialLevels={levelsRes.data || []}
       />
     </div>
   );
