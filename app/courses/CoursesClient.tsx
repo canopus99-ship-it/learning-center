@@ -21,6 +21,7 @@ type Course = {
   is_free: boolean;
   is_active: boolean;
   is_lesson: boolean;
+  use_levels?: boolean;
   memo: string | null;
 };
 
@@ -106,6 +107,13 @@ export default function CoursesClient() {
   const [isFree, setIsFree] = useState(false);
   const [feeJungGu, setFeeJungGu] = useState('');
   const [feeOther, setFeeOther] = useState('');
+  // 등급별 수강료
+  const [useLevels, setUseLevels] = useState(false);
+  const [levels, setLevels] = useState<{ level_name: string; fee_jung_gu: string; fee_other: string }[]>([
+    { level_name: '초급', fee_jung_gu: '', fee_other: '' },
+    { level_name: '중급', fee_jung_gu: '', fee_other: '' },
+    { level_name: '고급', fee_jung_gu: '', fee_other: '' },
+  ]);
   const [memo, setMemo] = useState('');
 
   useEffect(() => {
@@ -208,6 +216,28 @@ export default function CoursesClient() {
     setRegularSessions([{ frequency: 'weekly', day_of_week: 1, specific_date: null, start_time: '10:00', end_time: '11:30' }]);
     setIrregularSessions([{ frequency: null, day_of_week: null, specific_date: '', start_time: '10:00', end_time: '11:30' }]);
     setIsFree(false); setFeeJungGu(''); setFeeOther(''); setMemo('');
+    setUseLevels(false);
+    setLevels([
+      { level_name: '초급', fee_jung_gu: '', fee_other: '' },
+      { level_name: '중급', fee_jung_gu: '', fee_other: '' },
+      { level_name: '고급', fee_jung_gu: '', fee_other: '' },
+    ]);
+  }
+
+  // 등급 관리 헬퍼
+  function addLevel() {
+    setLevels([...levels, { level_name: '', fee_jung_gu: '', fee_other: '' }]);
+  }
+  function removeLevel(idx: number) {
+    if (levels.length <= 1) { alert('등급은 최소 1개 이상이어야 합니다.'); return; }
+    setLevels(levels.filter((_, i) => i !== idx));
+  }
+  function updateLevel(idx: number, field: 'level_name' | 'fee_jung_gu' | 'fee_other', value: string) {
+    setLevels(levels.map((lv, i) => {
+      if (i !== idx) return lv;
+      if (field === 'level_name') return { ...lv, level_name: value };
+      return { ...lv, [field]: value.replace(/[^0-9]/g, '') };
+    }));
   }
 
   async function handleSubmit() {
@@ -243,6 +273,7 @@ export default function CoursesClient() {
       fee_other: isFree ? 0 : (parseInt(feeOther, 10) || 0),
       is_free: isFree,
       is_lesson: isLesson,
+      use_levels: useLevels,
       memo: memo.trim() || null,
       is_active: true,
     };
@@ -259,6 +290,24 @@ export default function CoursesClient() {
     }
 
     const courseId = insertedCourse.id;
+
+    // 1-2. 등급 강좌면 course_levels 생성
+    if (useLevels) {
+      const validLevels = levels.filter(lv => lv.level_name.trim());
+      if (validLevels.length > 0) {
+        const levelsToInsert = validLevels.map((lv, idx) => ({
+          course_id: courseId,
+          level_name: lv.level_name.trim(),
+          fee_jung_gu: parseInt(lv.fee_jung_gu, 10) || 0,
+          fee_other: parseInt(lv.fee_other, 10) || 0,
+          sort_order: idx,
+        }));
+        const { error: levelError } = await supabase.from('course_levels').insert(levelsToInsert);
+        if (levelError) {
+          alert('등급 생성 실패: ' + levelError.message + '\n강좌는 생성되었으니 강좌 수정에서 등급을 다시 등록해주세요.');
+        }
+      }
+    }
 
     // 2. 세션 생성
     const sessionsToInsert = operationType === 'regular'
@@ -665,16 +714,72 @@ export default function CoursesClient() {
             </label>
 
             {!isFree && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <div>
-                  <label style={labelStyle}>중구민 수강료 (원)</label>
-                  <input value={feeJungGu} onChange={(e) => setFeeJungGu(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} placeholder="50000" />
-                </div>
-                <div>
-                  <label style={labelStyle}>타구민 수강료 (원)</label>
-                  <input value={feeOther} onChange={(e) => setFeeOther(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} placeholder="70000" />
-                </div>
-              </div>
+              <>
+                {/* 등급 사용 체크 */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', marginBottom: 12 }}>
+                  <input type="checkbox" checked={useLevels} onChange={(e) => setUseLevels(e.target.checked)} />
+                  <span>📊 <strong>등급별 수강료 사용</strong> (초급/중급/고급 등 등급마다 수강료가 다른 경우)</span>
+                </label>
+
+                {!useLevels ? (
+                  /* 일반 수강료 */
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                    <div>
+                      <label style={labelStyle}>중구민 수강료 (원)</label>
+                      <input value={feeJungGu} onChange={(e) => setFeeJungGu(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} placeholder="50000" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>타구민 수강료 (원)</label>
+                      <input value={feeOther} onChange={(e) => setFeeOther(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} placeholder="70000" />
+                    </div>
+                  </div>
+                ) : (
+                  /* 등급별 수강료 매트릭스 */
+                  <div style={{ background: '#F8F4FF', borderRadius: 8, padding: 12 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 36px', gap: 8, marginBottom: 6, fontSize: 12, fontWeight: 600, color: '#555' }}>
+                      <span>등급명</span>
+                      <span>중구민 (원)</span>
+                      <span>타구민 (원)</span>
+                      <span></span>
+                    </div>
+                    {levels.map((lv, idx) => (
+                      <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 36px', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+                        <input
+                          value={lv.level_name}
+                          onChange={(e) => updateLevel(idx, 'level_name', e.target.value)}
+                          style={inputStyle}
+                          placeholder="초급"
+                        />
+                        <input
+                          value={lv.fee_jung_gu}
+                          onChange={(e) => updateLevel(idx, 'fee_jung_gu', e.target.value)}
+                          style={inputStyle}
+                          placeholder="30000"
+                        />
+                        <input
+                          value={lv.fee_other}
+                          onChange={(e) => updateLevel(idx, 'fee_other', e.target.value)}
+                          style={inputStyle}
+                          placeholder="40000"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeLevel(idx)}
+                          style={{ width: 32, height: 32, borderRadius: 6, border: '1px solid #ddd', background: 'white', cursor: 'pointer', color: '#A32D2D' }}
+                          title="등급 삭제"
+                        >×</button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={addLevel}
+                      style={{ marginTop: 4, padding: '6px 12px', background: 'white', border: '1px dashed #7B3FBF', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: '#7B3FBF' }}
+                    >
+                      + 등급 추가
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -767,6 +872,8 @@ export default function CoursesClient() {
                   <td style={tdStyle}>
                     {c.is_free ? (
                       <span style={badgeStyle('#1D9E75')}>무료</span>
+                    ) : c.use_levels ? (
+                      <span style={{ fontSize: 12, color: '#7B3FBF' }}>📊 등급별</span>
                     ) : (
                       <span style={{ fontSize: 12 }}>
                         {c.fee_jung_gu.toLocaleString()} / {c.fee_other.toLocaleString()}
