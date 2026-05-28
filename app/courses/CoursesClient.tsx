@@ -20,6 +20,7 @@ type Course = {
   fee_other: number;
   is_free: boolean;
   is_active: boolean;
+  is_lesson: boolean;
   memo: string | null;
 };
 
@@ -83,6 +84,7 @@ export default function CoursesClient() {
   const [name, setName] = useState('');
   const [instructorId, setInstructorId] = useState<string>('');
   const [subInstructorId, setSubInstructorId] = useState<string>('');
+  const [isLesson, setIsLesson] = useState(false);
   const [classroom, setClassroom] = useState('');
   const [capacity, setCapacity] = useState('20');
 
@@ -199,7 +201,7 @@ export default function CoursesClient() {
   }
 
   function resetForm() {
-    setCategory('문화강좌'); setName(''); setInstructorId(''); setSubInstructorId('');
+    setCategory('문화강좌'); setName(''); setInstructorId(''); setSubInstructorId(''); setIsLesson(false);
     setClassroom(''); setCapacity('20');
     setOperationType('regular');
     setOperationMonths([...ALL_MONTHS]);
@@ -240,6 +242,7 @@ export default function CoursesClient() {
       fee_jung_gu: isFree ? 0 : (parseInt(feeJungGu, 10) || 0),
       fee_other: isFree ? 0 : (parseInt(feeOther, 10) || 0),
       is_free: isFree,
+      is_lesson: isLesson,
       memo: memo.trim() || null,
       is_active: true,
     };
