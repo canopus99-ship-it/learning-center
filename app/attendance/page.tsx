@@ -47,7 +47,7 @@ export default async function AttendancePage() {
   // 강좌 조회 (권한에 따라 필터링)
   let coursesQuery = supabase
     .from('courses')
-    .select('id, category, name, instructor_id, classroom')
+    .select('id, category, name, instructor_id, classroom, is_lesson')
     .eq('is_active', true)
     .order('category')
     .order('name');
