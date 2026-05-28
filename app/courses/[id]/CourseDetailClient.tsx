@@ -108,6 +108,16 @@ export default function CourseDetailClient({
   const [editIsFree, setEditIsFree] = useState(course.is_free);
   const [editFeeJungGu, setEditFeeJungGu] = useState(String(course.fee_jung_gu));
   const [editFeeOther, setEditFeeOther] = useState(String(course.fee_other));
+  const [editUseLevels, setEditUseLevels] = useState(!!course.use_levels);
+  const [editLevels, setEditLevels] = useState<{ id?: number; level_name: string; fee_jung_gu: string; fee_other: string }[]>(
+    initialLevels.length > 0
+      ? initialLevels.map(lv => ({ id: lv.id, level_name: lv.level_name, fee_jung_gu: String(lv.fee_jung_gu), fee_other: String(lv.fee_other) }))
+      : [
+          { level_name: '초급', fee_jung_gu: '', fee_other: '' },
+          { level_name: '중급', fee_jung_gu: '', fee_other: '' },
+          { level_name: '고급', fee_jung_gu: '', fee_other: '' },
+        ]
+  );
   const [editMemo, setEditMemo] = useState(course.memo || '');
 
   // 무거운 수정 폼
@@ -165,9 +175,35 @@ export default function CourseDetailClient({
     setSessions((data as Session[]) || []);
   }
 
+  // 등급 관리 헬퍼
+  function addEditLevel() {
+    setEditLevels([...editLevels, { level_name: '', fee_jung_gu: '', fee_other: '' }]);
+  }
+  function removeEditLevel(idx: number) {
+    if (editLevels.length <= 1) { alert('등급은 최소 1개 이상이어야 합니다.'); return; }
+    setEditLevels(editLevels.filter((_, i) => i !== idx));
+  }
+  function updateEditLevel(idx: number, field: 'level_name' | 'fee_jung_gu' | 'fee_other', value: string) {
+    setEditLevels(editLevels.map((lv, i) => {
+      if (i !== idx) return lv;
+      if (field === 'level_name') return { ...lv, level_name: value };
+      return { ...lv, [field]: value.replace(/[^0-9]/g, '') };
+    }));
+  }
+
   // 가벼운 수정
   async function handleSaveBasic() {
     if (!editName.trim()) { alert('강좌명을 입력하세요'); return; }
+
+    // 등급 강좌면 등급 유효성 체크
+    if (!editIsFree && editUseLevels) {
+      const validLevels = editLevels.filter(lv => lv.level_name.trim());
+      if (validLevels.length === 0) {
+        alert('등급별 수강료를 사용하려면 등급을 최소 1개 이상 등록해야 합니다.');
+        return;
+      }
+    }
+
     const updated = {
       category: editCategory, name: editName.trim(),
       instructor_id: editInstructorId ? parseInt(editInstructorId, 10) : null,
@@ -177,15 +213,64 @@ export default function CourseDetailClient({
       capacity: parseInt(editCapacity, 10) || 20,
       fee_jung_gu: editIsFree ? 0 : (parseInt(editFeeJungGu, 10) || 0),
       fee_other: editIsFree ? 0 : (parseInt(editFeeOther, 10) || 0),
-      is_free: editIsFree, memo: editMemo.trim() || null,
+      is_free: editIsFree,
+      use_levels: !editIsFree && editUseLevels,
+      memo: editMemo.trim() || null,
     };
     const { error } = await supabase.from('courses').update(updated).eq('id', course.id);
-    if (error) alert('수정 실패: ' + error.message);
-    else {
-      alert('강좌 정보가 수정되었습니다!');
-      setCourse({ ...course, ...updated });
-      setBasicEditing(false);
+    if (error) { alert('수정 실패: ' + error.message); return; }
+
+    // 등급 강좌면 course_levels 갱신: 기존 다 지우고 새로 insert
+    // (단순한 방식 - 등급 ID가 enrollments에 연결돼있어도 같은 이름이면 사실상 동일 효과)
+    if (!editIsFree && editUseLevels) {
+      const validLevels = editLevels.filter(lv => lv.level_name.trim());
+      // 기존 등급 중 enrollments에서 사용중인지 확인 후 처리하는 게 안전하지만,
+      // 단순화: upsert 방식으로 id 있는 건 update, 없는 건 insert, 사라진 건 삭제
+      const existingIds = initialLevels.map(lv => lv.id);
+      const keepIds = validLevels.filter(lv => lv.id).map(lv => lv.id as number);
+      const toDelete = existingIds.filter(id => !keepIds.includes(id));
+
+      // 삭제
+      if (toDelete.length > 0) {
+        const { error: delErr } = await supabase.from('course_levels').delete().in('id', toDelete);
+        if (delErr) {
+          alert('일부 등급 삭제 실패 (사용중인 등급일 수 있음): ' + delErr.message);
+        }
+      }
+      // 업데이트 (기존 id 있는 것)
+      for (const lv of validLevels) {
+        if (lv.id) {
+          await supabase.from('course_levels').update({
+            level_name: lv.level_name.trim(),
+            fee_jung_gu: parseInt(lv.fee_jung_gu, 10) || 0,
+            fee_other: parseInt(lv.fee_other, 10) || 0,
+          }).eq('id', lv.id);
+        }
+      }
+      // 신규 insert (id 없는 것)
+      const newLevels = validLevels.filter(lv => !lv.id).map((lv, idx) => ({
+        course_id: course.id,
+        level_name: lv.level_name.trim(),
+        fee_jung_gu: parseInt(lv.fee_jung_gu, 10) || 0,
+        fee_other: parseInt(lv.fee_other, 10) || 0,
+        sort_order: existingIds.length + idx,
+      }));
+      if (newLevels.length > 0) {
+        const { error: insErr } = await supabase.from('course_levels').insert(newLevels);
+        if (insErr) {
+          alert('일부 등급 추가 실패: ' + insErr.message);
+        }
+      }
+    } else if (!editUseLevels && initialLevels.length > 0) {
+      // 등급 사용 해제: 기존 등급 모두 삭제 시도
+      await supabase.from('course_levels').delete().eq('course_id', course.id);
     }
+
+    alert('강좌 정보가 수정되었습니다!');
+    setCourse({ ...course, ...updated });
+    setBasicEditing(false);
+    // 페이지 새로고침으로 levels 다시 로드
+    router.refresh();
   }
 
   function handleCancelBasic() {
@@ -196,6 +281,16 @@ export default function CourseDetailClient({
     setEditClassroom(course.classroom || ''); setEditCapacity(String(course.capacity));
     setEditIsFree(course.is_free); setEditFeeJungGu(String(course.fee_jung_gu));
     setEditFeeOther(String(course.fee_other)); setEditMemo(course.memo || '');
+    setEditUseLevels(!!course.use_levels);
+    setEditLevels(
+      initialLevels.length > 0
+        ? initialLevels.map(lv => ({ id: lv.id, level_name: lv.level_name, fee_jung_gu: String(lv.fee_jung_gu), fee_other: String(lv.fee_other) }))
+        : [
+            { level_name: '초급', fee_jung_gu: '', fee_other: '' },
+            { level_name: '중급', fee_jung_gu: '', fee_other: '' },
+            { level_name: '고급', fee_jung_gu: '', fee_other: '' },
+          ]
+    );
     setBasicEditing(false);
   }
 
@@ -571,16 +666,72 @@ export default function CourseDetailClient({
                 <strong>무료 강좌</strong>
               </label>
               {!editIsFree && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                  <div>
-                    <label style={labelStyle}>중구민 수강료</label>
-                    <input value={editFeeJungGu} onChange={(e) => setEditFeeJungGu(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>타구민 수강료</label>
-                    <input value={editFeeOther} onChange={(e) => setEditFeeOther(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
-                  </div>
-                </div>
+                <>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', marginBottom: 12 }}>
+                    <input type="checkbox" checked={editUseLevels} onChange={(e) => setEditUseLevels(e.target.checked)} />
+                    <span>📊 <strong>등급별 수강료 사용</strong> (초급/중급/고급 등 등급마다 수강료가 다른 경우)</span>
+                  </label>
+
+                  {!editUseLevels ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                      <div>
+                        <label style={labelStyle}>중구민 수강료</label>
+                        <input value={editFeeJungGu} onChange={(e) => setEditFeeJungGu(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>타구민 수강료</label>
+                        <input value={editFeeOther} onChange={(e) => setEditFeeOther(e.target.value.replace(/[^0-9]/g, ''))} style={inputStyle} />
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ background: '#F8F4FF', borderRadius: 8, padding: 12 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 36px', gap: 8, marginBottom: 6, fontSize: 12, fontWeight: 600, color: '#555' }}>
+                        <span>등급명</span>
+                        <span>중구민 (원)</span>
+                        <span>타구민 (원)</span>
+                        <span></span>
+                      </div>
+                      {editLevels.map((lv, idx) => (
+                        <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 36px', gap: 8, marginBottom: 6, alignItems: 'center' }}>
+                          <input
+                            value={lv.level_name}
+                            onChange={(e) => updateEditLevel(idx, 'level_name', e.target.value)}
+                            style={inputStyle}
+                            placeholder="초급"
+                          />
+                          <input
+                            value={lv.fee_jung_gu}
+                            onChange={(e) => updateEditLevel(idx, 'fee_jung_gu', e.target.value)}
+                            style={inputStyle}
+                            placeholder="30000"
+                          />
+                          <input
+                            value={lv.fee_other}
+                            onChange={(e) => updateEditLevel(idx, 'fee_other', e.target.value)}
+                            style={inputStyle}
+                            placeholder="40000"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeEditLevel(idx)}
+                            style={{ width: 32, height: 32, borderRadius: 6, border: '1px solid #ddd', background: 'white', cursor: 'pointer', color: '#A32D2D' }}
+                            title="등급 삭제"
+                          >×</button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={addEditLevel}
+                        style={{ marginTop: 4, padding: '6px 12px', background: 'white', border: '1px dashed #7B3FBF', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: '#7B3FBF' }}
+                      >
+                        + 등급 추가
+                      </button>
+                      <p style={{ fontSize: 11, color: '#7B3FBF', margin: '8px 0 0' }}>
+                        ⚠ 이미 수강신청에 사용된 등급은 삭제하면 오류가 날 수 있습니다.
+                      </p>
+                    </div>
+                  )}
+                </>
               )}
             </div>
             <div>
