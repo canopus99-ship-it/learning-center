@@ -26,6 +26,16 @@ type Course = {
   fee_other: number;
   is_free: boolean;
   is_active: boolean;
+  use_levels?: boolean;
+};
+
+type CourseLevel = {
+  id: number;
+  course_id: number;
+  level_name: string;
+  fee_jung_gu: number;
+  fee_other: number;
+  sort_order: number;
 };
 
 type Member = {
@@ -48,6 +58,7 @@ type Enrollment = {
   end_from_year: number | null;
   end_from_month: number | null;
   refund_date: string | null;
+  course_level_id?: number | null;
   members: Member | null;
 };
 
@@ -103,6 +114,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [courseLevels, setCourseLevels] = useState<CourseLevel[]>([]);
 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
@@ -174,18 +186,20 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
   async function loadData() {
     setLoading(true);
-    const [coursesRes, enrollmentsRes, paymentsRes] = await Promise.all([
+    const [coursesRes, enrollmentsRes, paymentsRes, levelsRes] = await Promise.all([
       supabase.from('courses').select('*').eq('is_active', true).order('category').order('name'),
       supabase
         .from('enrollments')
         .select('*, members(id, name, phone, region_type, is_jung_gu, is_discount_50, is_discount_100)')
         .in('status', ['active', 'paused', 'ended']),
       supabase.from('payments').select('*').eq('payment_year', selectedYear),
+      supabase.from('course_levels').select('*').order('course_id').order('sort_order'),
     ]);
 
     setCourses(coursesRes.data || []);
     setEnrollments((enrollmentsRes.data as Enrollment[]) || []);
     setPayments(paymentsRes.data || []);
+    setCourseLevels(levelsRes.data || []);
     setLoading(false);
   }
 
@@ -195,6 +209,23 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       p.payment_year === selectedYear &&
       p.payment_month === month
     ) || null;
+  }
+
+  // 등급 강좌 대응: enrollment + course에서 실제 적용할 수강료 반환
+  function getCourseFees(course: Course, enrollment: Enrollment | null | undefined): { fee_jung_gu: number; fee_other: number } {
+    if (course.use_levels && enrollment?.course_level_id) {
+      const level = courseLevels.find(lv => lv.id === enrollment.course_level_id);
+      if (level) {
+        return { fee_jung_gu: level.fee_jung_gu, fee_other: level.fee_other };
+      }
+    }
+    return { fee_jung_gu: course.fee_jung_gu, fee_other: course.fee_other };
+  }
+
+  // memberId 기반: 해당 회원의 이 강좌 enrollment를 찾아 수강료 반환
+  function getEnrollmentFees(course: Course, memberId: number): { fee_jung_gu: number; fee_other: number } {
+    const enrollment = enrollments.find(e => e.course_id === course.id && e.member_id === memberId);
+    return getCourseFees(course, enrollment);
   }
 
   function getEnrollmentsByCourse(courseId: number): Enrollment[] {
@@ -289,11 +320,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     selectedAnnualCourses.forEach(courseId => {
       const course = courses.find(c => c.id === courseId);
       if (!course) return;
-      const calc = calculateFee(
-        course.fee_jung_gu, course.fee_other,
+      const calc = (() => { const f = getEnrollmentFees(course, selectedMember.id); return calculateFee(
+        f.fee_jung_gu, f.fee_other,
         selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
         course.is_free
-      );
+      ); })();
       const annualAmount = calculateAnnualFee(calc.amount);
 
       // 연납에 포함된 월들을 processedCells에 추가
@@ -320,11 +351,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       const course = courses.find(c => c.id === courseId);
       if (!course) return;
 
-      const calc = calculateFee(
-        course.fee_jung_gu, course.fee_other,
+      const calc = (() => { const f = getEnrollmentFees(course, selectedMember.id); return calculateFee(
+        f.fee_jung_gu, f.fee_other,
         selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
         course.is_free
-      );
+      ); })();
 
       items.push({
         courseId,
@@ -404,11 +435,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       );
       if (!enrollment) continue;
 
-      const calc = calculateFee(
-        course.fee_jung_gu, course.fee_other,
+      const calc = (() => { const f = getEnrollmentFees(course, selectedMember.id); return calculateFee(
+        f.fee_jung_gu, f.fee_other,
         selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
         course.is_free
-      );
+      ); })();
 
       if (item.isAnnual) {
         // 연납: 2~12월 각각 결제 기록 생성 (1월 OT 제외)
@@ -499,11 +530,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     const member = enrollment.members;
     if (!member) return;
 
-    const calc = calculateFee(
-      course.fee_jung_gu, course.fee_other,
+    const calc = (() => { const f = getCourseFees(course, enrollment); return calculateFee(
+      f.fee_jung_gu, f.fee_other,
       member.is_jung_gu, member.is_discount_50, member.is_discount_100,
       course.is_free
-    );
+    ); })();
 
     setEditingPayment({ enrollment, course, existing, month });
     setPayAmount(existing?.amount?.toString() || calc.amount.toString());
@@ -520,11 +551,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     const member = enrollment.members;
     if (!member) return;
 
-    const calc = calculateFee(
-      course.fee_jung_gu, course.fee_other,
+    const calc = (() => { const f = getCourseFees(course, enrollment); return calculateFee(
+      f.fee_jung_gu, f.fee_other,
       member.is_jung_gu, member.is_discount_50, member.is_discount_100,
       course.is_free
-    );
+    ); })();
 
     const data = {
       enrollment_id: enrollment.id,
@@ -843,7 +874,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
             if (!e.members) return false;
             if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
             if (selectedMonth === 1) return false;
-            const calc = calculateFee(course.fee_jung_gu, course.fee_other, e.members.is_jung_gu, e.members.is_discount_50, e.members.is_discount_100, course.is_free);
+            const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
             if (calc.amount === 0) return false;
             const p = getPayment(e.id, selectedMonth);
             return !p || !p.is_paid;
@@ -854,7 +885,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         const member = e.members;
         if (!member) return;
         const p = getPayment(e.id, selectedMonth);
-        const calc = calculateFee(course.fee_jung_gu, course.fee_other, member.is_jung_gu, member.is_discount_50, member.is_discount_100, course.is_free);
+        const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, member.is_jung_gu, member.is_discount_50, member.is_discount_100, course.is_free); })();
         const isAutoComplete = calc.amount === 0;
         const pastOrCurrent = isPastOrCurrent(selectedMonth);
         const isOTMonth = selectedMonth === 1;
@@ -919,7 +950,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           if (m === 1) continue; // 1월 OT 제외
           if (!operationMonths.includes(m)) continue;
           if (isEndedAtMonth(e, selectedYear, m)) continue;
-          const calc = calculateFee(course.fee_jung_gu, course.fee_other, e.members.is_jung_gu, e.members.is_discount_50, e.members.is_discount_100, course.is_free);
+          const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
           if (calc.amount === 0) continue;
           const p = getPayment(e.id, m);
           if (!p || !p.is_paid) unpaidMonths.push(m);
@@ -1066,11 +1097,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                           if (!course) return null;
 
                           const operationMonths = parseOperationMonths(course.operation_months);
-                          const calc = calculateFee(
-                            course.fee_jung_gu, course.fee_other,
+                          const calc = (() => { const f = getEnrollmentFees(course, selectedMember.id); return calculateFee(
+                            f.fee_jung_gu, f.fee_other,
                             selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
                             course.is_free
-                          );
+                          ); })();
                           const canAnnual = isAnnualAvailable(course.operation_months) && calc.amount > 0;
                           const isAnnualChecked = selectedAnnualCourses.has(course.id);
                           const annualAmount = calculateAnnualFee(calc.amount);
@@ -1403,7 +1434,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                   if (!isOperating || !e.members) return false;
                   if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
                   if (selectedMonth === 1) return false; // 1월 OT 제외
-                  const calc = calculateFee(course.fee_jung_gu, course.fee_other, e.members.is_jung_gu, e.members.is_discount_50, e.members.is_discount_100, course.is_free);
+                  const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
                   if (calc.amount === 0) return false;
                   const p = getPayment(e.id, selectedMonth);
                   return !p || !p.is_paid;
@@ -1414,7 +1445,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                       if (!isOperating || !e.members) return false;
                       if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
                       if (selectedMonth === 1) return false;
-                      const calc = calculateFee(course.fee_jung_gu, course.fee_other, e.members.is_jung_gu, e.members.is_discount_50, e.members.is_discount_100, course.is_free);
+                      const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
                       if (calc.amount === 0) return false;
                       const p = getPayment(e.id, selectedMonth);
                       return !p || !p.is_paid;
@@ -1469,7 +1500,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                             // 정상적으로 결제 정보를 표시함
                             // (getEnrollmentsByCourse에서 종료일 이후 월은 이미 제외됨)
 
-                            const calc = calculateFee(course.fee_jung_gu, course.fee_other, member.is_jung_gu, member.is_discount_50, member.is_discount_100, course.is_free);
+                            const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, member.is_jung_gu, member.is_discount_50, member.is_discount_100, course.is_free); })();
                             const isAutoComplete = calc.amount === 0;
                             const pastOrCurrent = isPastOrCurrent(selectedMonth);
                             const isOTMonth = selectedMonth === 1;
@@ -1629,16 +1660,25 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           <div style={modalContentStyle}>
             <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>결제 처리</h2>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
-              <strong>{editingPayment.enrollment.members?.name}</strong> · {editingPayment.course.name} · {selectedYear}년 {editingPayment.month}월
+              <strong>{editingPayment.enrollment.members?.name}</strong>
+              {editingPayment.course.use_levels && editingPayment.enrollment.course_level_id && (() => {
+                const lv = courseLevels.find(l => l.id === editingPayment.enrollment.course_level_id);
+                return lv ? (
+                  <span style={{ marginLeft: 6, fontSize: 11, padding: '2px 8px', background: '#7B3FBF', color: 'white', borderRadius: 3 }}>
+                    {lv.level_name}
+                  </span>
+                ) : null;
+              })()}
+              {' · '}{editingPayment.course.name} · {selectedYear}년 {editingPayment.month}월
             </p>
 
             {(() => {
               const member = editingPayment.enrollment.members!;
-              const calc = calculateFee(
-                editingPayment.course.fee_jung_gu, editingPayment.course.fee_other,
+              const calc = (() => { const f = getCourseFees(editingPayment.course, editingPayment.enrollment); return calculateFee(
+                f.fee_jung_gu, f.fee_other,
                 member.is_jung_gu, member.is_discount_50, member.is_discount_100,
                 editingPayment.course.is_free
-              );
+              ); })();
               return (
                 <div style={{ background: '#E6F1FB', border: '1px solid #B5D4F4', padding: 12, borderRadius: 6, fontSize: 12, color: '#042C53', marginBottom: 12 }}>
                   💡 자동 계산: {calc.description}
