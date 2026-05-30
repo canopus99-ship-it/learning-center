@@ -10,11 +10,11 @@ export default async function EnrollUploadPage({ params }: { params: { id: strin
 
   const supabase = await createClient();
   const courseId = parseInt(params.id, 10);
-  const { data: course } = await supabase
-    .from('courses')
-    .select('id, name, category, capacity, is_active')
-    .eq('id', courseId)
-    .single();
+  const [courseRes, levelsRes] = await Promise.all([
+    supabase.from('courses').select('id, name, category, capacity, is_active, use_levels').eq('id', courseId).single(),
+    supabase.from('course_levels').select('*').eq('course_id', courseId).order('sort_order'),
+  ]);
+  const course = courseRes.data;
 
   if (!course) {
     redirect('/courses?error=not_found');
@@ -23,7 +23,7 @@ export default async function EnrollUploadPage({ params }: { params: { id: strin
   return (
     <div>
       <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
-      <EnrollUploadClient course={course} />
+      <EnrollUploadClient course={course} levels={levelsRes.data || []} />
     </div>
   );
 }

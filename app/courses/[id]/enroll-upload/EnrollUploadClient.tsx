@@ -11,15 +11,27 @@ type Course = {
   category: string;
   capacity: number;
   is_active: boolean;
+  use_levels?: boolean;
+};
+
+type CourseLevel = {
+  id: number;
+  course_id: number;
+  level_name: string;
+  fee_jung_gu: number;
+  fee_other: number;
+  sort_order: number;
 };
 
 type ParsedRow = {
   name: string;
   phone: string;
+  levelName: string;            // 입력된 등급명 (등급 강좌만)
+  courseLevelId: number | null; // 매칭된 등급 ID
   // 매칭된 회원 정보
   memberId: number | null;
   // 검증 결과
-  status: 'new' | 'already' | 'resume' | 'no_member' | 'duplicate_in_file';
+  status: 'new' | 'already' | 'resume' | 'no_member' | 'no_level' | 'duplicate_in_file';
   message: string;
   existingEnrollmentId: number | null; // 종료 → 재개용
 };
@@ -32,9 +44,11 @@ function formatPhone(raw: string): string {
   return String(raw).trim();
 }
 
-export default function EnrollUploadClient({ course }: { course: Course }) {
+export default function EnrollUploadClient({ course, levels }: { course: Course; levels: CourseLevel[] }) {
   const supabase = createClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const useLevels = !!course.use_levels;
 
   const [parsedRows, setParsedRows] = useState<ParsedRow[]>([]);
   const [fileName, setFileName] = useState('');
@@ -43,25 +57,38 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
 
   // 양식 다운로드
   function downloadTemplate() {
-    const headers = ['이름', '연락처'];
-    const examples = [
-      ['김중구', '010-1111-2222'],
-      ['이수급', '010-3333-4444'],
-      ['박다자', '010-5555-6666'],
-    ];
-    const note = [
+    const levelNamesText = levels.map(lv => lv.level_name).join(' / ');
+    const headers = useLevels ? ['이름', '연락처', '등급'] : ['이름', '연락처'];
+    const examples = useLevels
+      ? [
+          ['김중구', '010-1111-2222', levels[0]?.level_name || '초급'],
+          ['이수급', '010-3333-4444', levels[1]?.level_name || levels[0]?.level_name || '중급'],
+          ['박다자', '010-5555-6666', levels[Math.min(2, levels.length - 1)]?.level_name || '고급'],
+        ]
+      : [
+          ['김중구', '010-1111-2222'],
+          ['이수급', '010-3333-4444'],
+          ['박다자', '010-5555-6666'],
+        ];
+    const note: string[][] = [
       [],
       ['※ 입력 안내'],
       ['1. 이름과 연락처는 회원 정보와 정확히 일치해야 합니다.'],
       ['2. 회원으로 먼저 등록되어 있어야 수강신청이 가능합니다.'],
       ['3. 회원 일괄 등록은 회원관리 메뉴에서 가능합니다.'],
       ['4. 이미 이 강좌에 신청된 회원은 자동으로 건너뜁니다.'],
-      ['5. 이 안내 행과 예시 행은 삭제하고 업로드해도 됩니다.'],
     ];
+    if (useLevels) {
+      note.push([`5. 이 강좌는 등급별 수강료가 있습니다. 등급 컬럼을 반드시 입력하세요.`]);
+      note.push([`   사용 가능한 등급: ${levelNamesText}`]);
+      note.push(['6. 이 안내 행과 예시 행은 삭제하고 업로드해도 됩니다.']);
+    } else {
+      note.push(['5. 이 안내 행과 예시 행은 삭제하고 업로드해도 됩니다.']);
+    }
 
     const rows = [headers, ...examples, ...note];
     const ws = XLSX.utils.aoa_to_sheet(rows);
-    ws['!cols'] = [{ wch: 12 }, { wch: 16 }];
+    ws['!cols'] = useLevels ? [{ wch: 12 }, { wch: 16 }, { wch: 10 }] : [{ wch: 12 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '수강신청');
     const safeName = course.name.replace(/[\\/?*[\]:]/g, '');
@@ -118,6 +145,12 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
     const parsed: ParsedRow[] = [];
     const seenInFile = new Set<string>();
 
+    // 등급명 → ID 매핑 (대소문자/공백 무관)
+    const levelMap = new Map<string, number>();
+    levels.forEach(lv => {
+      levelMap.set(lv.level_name.trim().toLowerCase(), lv.id);
+    });
+
     for (let i = headerIdx + 1; i < rows.length; i++) {
       const r = rows[i];
       if (!r || r.length === 0) continue;
@@ -125,12 +158,40 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
       if (!name || name.startsWith('※')) continue;
 
       const phone = formatPhone(String(r[1] || ''));
+      const levelName = useLevels ? String(r[2] || '').trim() : '';
       const key = `${name}|${phone}`;
+
+      // 등급 매칭
+      let courseLevelId: number | null = null;
+      if (useLevels) {
+        if (!levelName) {
+          parsed.push({
+            name, phone, levelName, courseLevelId: null,
+            memberId: null,
+            status: 'no_level',
+            message: `등급 미입력 (필수: ${levels.map(l => l.level_name).join(', ')})`,
+            existingEnrollmentId: null,
+          });
+          continue;
+        }
+        const matched = levelMap.get(levelName.toLowerCase());
+        if (!matched) {
+          parsed.push({
+            name, phone, levelName, courseLevelId: null,
+            memberId: null,
+            status: 'no_level',
+            message: `"${levelName}" 등급 없음 (사용 가능: ${levels.map(l => l.level_name).join(', ')})`,
+            existingEnrollmentId: null,
+          });
+          continue;
+        }
+        courseLevelId = matched;
+      }
 
       // 파일 내 중복
       if (seenInFile.has(key)) {
         parsed.push({
-          name, phone,
+          name, phone, levelName, courseLevelId,
           memberId: null,
           status: 'duplicate_in_file',
           message: '파일 내 중복',
@@ -143,7 +204,7 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
       const memberId = memberMap.get(key);
       if (!memberId) {
         parsed.push({
-          name, phone,
+          name, phone, levelName, courseLevelId,
           memberId: null,
           status: 'no_member',
           message: '회원 정보 없음 (먼저 회원 등록 필요)',
@@ -156,7 +217,7 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
       if (existing) {
         if (existing.status === 'ended') {
           parsed.push({
-            name, phone,
+            name, phone, levelName, courseLevelId,
             memberId,
             status: 'resume',
             message: '이전 종료된 신청 → 재개됨',
@@ -164,7 +225,7 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
           });
         } else {
           parsed.push({
-            name, phone,
+            name, phone, levelName, courseLevelId,
             memberId,
             status: 'already',
             message: `이미 신청됨 (${existing.status === 'waiting' ? '대기' : existing.status === 'paused' ? '일시중지' : '수강중'})`,
@@ -173,7 +234,7 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
         }
       } else {
         parsed.push({
-          name, phone,
+          name, phone, levelName, courseLevelId,
           memberId,
           status: 'new',
           message: '',
@@ -202,12 +263,16 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
     // 1) 신규 신청 insert
     let addedCount = 0;
     if (newRows.length > 0) {
-      const inserts = newRows.map(r => ({
-        member_id: r.memberId,
-        course_id: course.id,
-        status: 'active',
-        enrolled_at: today,
-      }));
+      const inserts = newRows.map(r => {
+        const data: any = {
+          member_id: r.memberId,
+          course_id: course.id,
+          status: 'active',
+          enrolled_at: today,
+        };
+        if (useLevels) data.course_level_id = r.courseLevelId;
+        return data;
+      });
       const { error: insertErr } = await supabase.from('enrollments').insert(inserts);
       if (insertErr) {
         alert('신규 신청 등록 실패: ' + insertErr.message);
@@ -221,7 +286,7 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
     let resumedCount = 0;
     for (const r of resumeRows) {
       if (!r.existingEnrollmentId) continue;
-      const { error } = await supabase.from('enrollments').update({
+      const updateData: any = {
         status: 'active',
         end_date: null,
         end_reason: null,
@@ -230,7 +295,9 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
         ended_at: null,
         // 재개 시 신청일도 갱신
         enrolled_at: today,
-      }).eq('id', r.existingEnrollmentId);
+      };
+      if (useLevels) updateData.course_level_id = r.courseLevelId;
+      const { error } = await supabase.from('enrollments').update(updateData).eq('id', r.existingEnrollmentId);
       if (!error) resumedCount++;
     }
 
@@ -255,6 +322,7 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
   const resumeCount = parsedRows.filter(r => r.status === 'resume').length;
   const alreadyCount = parsedRows.filter(r => r.status === 'already').length;
   const noMemberCount = parsedRows.filter(r => r.status === 'no_member').length;
+  const noLevelCount = parsedRows.filter(r => r.status === 'no_level').length;
   const dupInFileCount = parsedRows.filter(r => r.status === 'duplicate_in_file').length;
 
   // 회원 미등록 명단만 추출 → CSV 다운로드용
@@ -286,8 +354,18 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
       }}>
         <h3 style={{ fontSize: 14, margin: '0 0 8px', color: '#042C53' }}>📋 STEP 1. 엑셀 양식 다운로드</h3>
         <p style={{ fontSize: 13, color: '#042C53', margin: '0 0 12px', lineHeight: 1.6 }}>
-          양식 파일을 다운받아 신청자 명단 (이름, 연락처)을 채워주세요.
+          양식 파일을 다운받아 신청자 명단 (이름, 연락처{useLevels ? ', 등급' : ''})을 채워주세요.
         </p>
+        {useLevels && (
+          <div style={{
+            background: '#F8F4FF', border: '1px solid #D6BFFF',
+            borderRadius: 6, padding: 10, marginBottom: 12,
+            fontSize: 12, color: '#7B3FBF', lineHeight: 1.5,
+          }}>
+            📊 <strong>이 강좌는 등급별 수강료 강좌입니다.</strong><br />
+            등급 컬럼에 다음 중 하나를 정확히 입력해주세요: <strong>{levels.map(l => l.level_name).join(', ')}</strong>
+          </div>
+        )}
         <button onClick={downloadTemplate} style={{
           padding: '8px 16px', background: '#185FA5', color: 'white',
           border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 500,
@@ -340,6 +418,11 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
                 회원 미등록 {noMemberCount}건
               </span>
             )}
+            {noLevelCount > 0 && (
+              <span style={{ padding: '6px 12px', background: '#A32D2D', color: 'white', borderRadius: 6, fontSize: 13 }}>
+                등급 오류 {noLevelCount}건
+              </span>
+            )}
             {dupInFileCount > 0 && (
               <span style={{ padding: '6px 12px', background: '#888', color: 'white', borderRadius: 6, fontSize: 13 }}>
                 파일 내 중복 {dupInFileCount}건
@@ -376,6 +459,7 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
                   <th style={th}>상태</th>
                   <th style={th}>이름</th>
                   <th style={th}>연락처</th>
+                  {useLevels && <th style={th}>등급</th>}
                   <th style={th}>비고</th>
                 </tr>
               </thead>
@@ -385,16 +469,19 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
                     : r.status === 'resume' ? '#7B3FBF'
                     : r.status === 'already' ? '#BA7517'
                     : r.status === 'no_member' ? '#A32D2D'
+                    : r.status === 'no_level' ? '#A32D2D'
                     : '#888';
                   const statusLabel = r.status === 'new' ? '등록'
                     : r.status === 'resume' ? '재개'
                     : r.status === 'already' ? '중복'
                     : r.status === 'no_member' ? '미등록'
+                    : r.status === 'no_level' ? '등급오류'
                     : '파일중복';
                   const bgColor = r.status === 'new' ? 'white'
                     : r.status === 'resume' ? '#F8F4FF'
                     : r.status === 'already' ? '#FFFBF0'
                     : r.status === 'no_member' ? '#FFF5F5'
+                    : r.status === 'no_level' ? '#FFF5F5'
                     : '#fafafa';
                   return (
                     <tr key={idx} style={{ borderBottom: '1px solid #f0f0f0', background: bgColor }}>
@@ -407,6 +494,19 @@ export default function EnrollUploadClient({ course }: { course: Course }) {
                       </td>
                       <td style={td}><strong>{r.name}</strong></td>
                       <td style={td}>{r.phone || '-'}</td>
+                      {useLevels && (
+                        <td style={td}>
+                          {r.courseLevelId ? (
+                            <span style={{ fontSize: 11, padding: '2px 8px', background: '#7B3FBF', color: 'white', borderRadius: 3 }}>
+                              {r.levelName}
+                            </span>
+                          ) : r.levelName ? (
+                            <span style={{ fontSize: 12, color: '#A32D2D' }}>❌ {r.levelName}</span>
+                          ) : (
+                            <span style={{ color: '#888', fontSize: 12 }}>-</span>
+                          )}
+                        </td>
+                      )}
                       <td style={td}>
                         {r.message ? (
                           <span style={{ fontSize: 12, color: statusColor }}>{r.message}</span>
