@@ -934,34 +934,181 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     XLSX.writeFile(wb, filename);
   }
 
-  // 미납자 목록 (전체 강좌)
-  const allUnpaid = (() => {
-    const result: { course: Course; enrollment: Enrollment; waitingCount: number; unpaidMonths: number[] }[] = [];
-    courses.forEach(course => {
-      if (course.is_free) return;
-      const operationMonths = parseOperationMonths(course.operation_months);
-      const courseEnrollments = enrollments.filter(e => e.course_id === course.id && e.status !== 'ended');
-      const waitingCount = enrollments.filter(e => e.course_id === course.id && e.status === 'waiting').length;
+  // ============================================
+  // 미납자 점검 (새 컨셉)
+  // 기준: "기준 월 출석부에 있는 사람" 중 "조회 월 납부 현황"
+  // ============================================
 
+  // 조회 월 컨트롤 (기본: 검색일이 속한 달의 다음 달)
+  const defaultCheckYear = today.getMonth() === 11 ? todayYear + 1 : todayYear;
+  const defaultCheckMonth = today.getMonth() === 11 ? 1 : todayMonth + 1;
+  const [checkYear, setCheckYear] = useState(defaultCheckYear);
+  const [checkMonth, setCheckMonth] = useState(defaultCheckMonth);
+  // 강좌 다중 선택 (빈 Set = 전체)
+  const [unpaidCourseFilter, setUnpaidCourseFilter] = useState<Set<number>>(new Set());
+
+  // 기준 월: 검색일이 속한 달 (자동)
+  const baseYear = todayYear;
+  const baseMonth = todayMonth;
+
+  type UnpaidStatus = 'paid' | 'unpaid' | 'ended' | 'refund' | 'carryover';
+  type UnpaidRow = {
+    course: Course;
+    enrollment: Enrollment;
+    member: Member;
+    status: UnpaidStatus;
+  };
+
+  // 기준 월 출석부에 있는 사람 = 그 월에 결제 완료한 사람 (출석부 노출 조건과 동일)
+  function isInBaseAttendance(enrollment: Enrollment, course: Course): boolean {
+    if (course.is_free) {
+      // 무료 강좌는 결제 무관, active 상태만 체크
+      if (enrollment.status === 'ended' && isEndedAtMonth(enrollment, baseYear, baseMonth)) return false;
+      return true;
+    }
+    // 기준 월에 종료된 경우 제외
+    if (isEndedAtMonth(enrollment, baseYear, baseMonth)) return false;
+    // 환불일이 기준 월 1일 이전이면 제외 (그전에 그만둠)
+    if (enrollment.refund_date) {
+      const monthStart = `${baseYear}-${String(baseMonth).padStart(2, '0')}-01`;
+      if (enrollment.refund_date < monthStart) return false;
+    }
+    // 기준 월 결제 완료 여부
+    const p = getPayment(enrollment.id, baseMonth);
+    // 기준 월 = baseYear이지만 selectedYear가 다를 수 있으니 직접 찾기
+    const basePay = payments.find(pp =>
+      pp.enrollment_id === enrollment.id &&
+      pp.payment_year === baseYear &&
+      pp.payment_month === baseMonth &&
+      pp.is_paid
+    );
+    if (!basePay) return false;
+    return true;
+  }
+
+  // 조회 월 납부 상태 판정
+  function getCheckMonthStatus(enrollment: Enrollment, course: Course): UnpaidStatus {
+    // 1) 조회 월에 종료된 경우
+    if (isEndedAtMonth(enrollment, checkYear, checkMonth)) return 'ended';
+
+    // 2) 조회 월의 결제 기록 조회
+    const p = payments.find(pp =>
+      pp.enrollment_id === enrollment.id &&
+      pp.payment_year === checkYear &&
+      pp.payment_month === checkMonth
+    );
+
+    if (p) {
+      // 환불 처리됨
+      if (p.refund_amount && p.refund_amount > 0) return 'refund';
+      // 이월 처리됨
+      if (p.carryover_amount && p.carryover_amount > 0) return 'carryover';
+      // 정상 납부
+      if (p.is_paid) return 'paid';
+    }
+    // 미납
+    return 'unpaid';
+  }
+
+  // 조회 월 운영월 체크 + 1월 OT 체크 헬퍼
+  function isCheckMonthValid(course: Course): boolean {
+    if (checkMonth === 1) return false; // 1월 OT
+    const opMonths = parseOperationMonths(course.operation_months);
+    return opMonths.includes(checkMonth);
+  }
+
+  // 미납자 점검 데이터 계산
+  const unpaidRows: UnpaidRow[] = (() => {
+    const result: UnpaidRow[] = [];
+    const filterActive = unpaidCourseFilter.size > 0;
+    courses.forEach(course => {
+      if (filterActive && !unpaidCourseFilter.has(course.id)) return;
+      if (course.is_free) return; // 무료 강좌는 미납 개념 없음
+      if (!isCheckMonthValid(course)) return; // 조회 월이 운영월 아니거나 1월
+
+      const courseEnrollments = enrollments.filter(e => e.course_id === course.id);
       courseEnrollments.forEach(e => {
         if (!e.members) return;
-        const unpaidMonths: number[] = [];
-        for (let m = 1; m <= todayMonth; m++) {
-          if (m === 1) continue; // 1월 OT 제외
-          if (!operationMonths.includes(m)) continue;
-          if (isEndedAtMonth(e, selectedYear, m)) continue;
-          const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
-          if (calc.amount === 0) continue;
-          const p = getPayment(e.id, m);
-          if (!p || !p.is_paid) unpaidMonths.push(m);
-        }
-        if (unpaidMonths.length > 0) {
-          result.push({ course, enrollment: e, waitingCount, unpaidMonths });
-        }
+        if (!isInBaseAttendance(e, course)) return; // 기준 월 출석부에 없으면 제외
+        const status = getCheckMonthStatus(e, course);
+        result.push({ course, enrollment: e, member: e.members, status });
       });
     });
     return result;
   })();
+
+  // 강좌별 그룹핑
+  const unpaidByCourse = (() => {
+    const map = new Map<number, { course: Course; rows: UnpaidRow[] }>();
+    unpaidRows.forEach(r => {
+      if (!map.has(r.course.id)) map.set(r.course.id, { course: r.course, rows: [] });
+      map.get(r.course.id)!.rows.push(r);
+    });
+    // 이름순 정렬
+    map.forEach(g => g.rows.sort((a, b) => (a.member.name || '').localeCompare(b.member.name || '')));
+    return Array.from(map.values()).sort((a, b) => a.course.name.localeCompare(b.course.name));
+  })();
+
+  const totalCount = unpaidRows.length;
+  const paidCount = unpaidRows.filter(r => r.status === 'paid').length;
+  const unpaidOnlyCount = unpaidRows.filter(r => r.status === 'unpaid').length;
+  const endedCount = unpaidRows.filter(r => r.status === 'ended').length;
+  const refundCount = unpaidRows.filter(r => r.status === 'refund' || r.status === 'carryover').length;
+
+  // 강좌 필터 토글
+  function toggleUnpaidCourseFilter(courseId: number) {
+    const next = new Set(unpaidCourseFilter);
+    if (next.has(courseId)) next.delete(courseId);
+    else next.add(courseId);
+    setUnpaidCourseFilter(next);
+  }
+
+  // 미납자 점검 엑셀 다운로드 (3시트: 전체/납부완료/미납)
+  function downloadUnpaidExcel() {
+    if (unpaidRows.length === 0) {
+      alert('다운로드할 데이터가 없습니다.');
+      return;
+    }
+    const wb = XLSX.utils.book_new();
+    const statusLabel = (s: UnpaidStatus) =>
+      s === 'paid' ? '납부완료'
+      : s === 'unpaid' ? '미납'
+      : s === 'ended' ? '수강종료'
+      : s === 'refund' ? '환불'
+      : s === 'carryover' ? '환불(이월)'
+      : '';
+
+    // 시트1: 전체
+    const allRows: (string | number)[][] = [['연번', '강좌', '이름', '연락처', '상태']];
+    unpaidRows.forEach((r, idx) => {
+      allRows.push([idx + 1, r.course.name, r.member.name, r.member.phone || '', statusLabel(r.status)]);
+    });
+    const wsAll = XLSX.utils.aoa_to_sheet(allRows);
+    wsAll['!cols'] = [{ wch: 6 }, { wch: 16 }, { wch: 12 }, { wch: 16 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, wsAll, `전체 (${unpaidRows.length})`);
+
+    // 시트2: 납부완료
+    const paidList = unpaidRows.filter(r => r.status === 'paid');
+    const paidSheetRows: (string | number)[][] = [['연번', '강좌', '이름', '연락처']];
+    paidList.forEach((r, idx) => {
+      paidSheetRows.push([idx + 1, r.course.name, r.member.name, r.member.phone || '']);
+    });
+    const wsPaid = XLSX.utils.aoa_to_sheet(paidSheetRows);
+    wsPaid['!cols'] = [{ wch: 6 }, { wch: 16 }, { wch: 12 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, wsPaid, `납부완료 (${paidList.length})`);
+
+    // 시트3: 미납 (수강종료, 환불 제외 - 안내 대상)
+    const unpaidList = unpaidRows.filter(r => r.status === 'unpaid');
+    const unpaidSheetRows: (string | number)[][] = [['연번', '강좌', '이름', '연락처']];
+    unpaidList.forEach((r, idx) => {
+      unpaidSheetRows.push([idx + 1, r.course.name, r.member.name, r.member.phone || '']);
+    });
+    const wsUnpaid = XLSX.utils.aoa_to_sheet(unpaidSheetRows);
+    wsUnpaid['!cols'] = [{ wch: 6 }, { wch: 16 }, { wch: 12 }, { wch: 16 }];
+    XLSX.utils.book_append_sheet(wb, wsUnpaid, `미납 (${unpaidList.length})`);
+
+    XLSX.writeFile(wb, `납부현황_${checkYear}년${checkMonth}월_${baseYear}년${baseMonth}월출석부기준.xlsx`);
+  }
 
   const { items: selectionItems, total: selectionTotal } = calculateSelectionTotal();
 
@@ -974,7 +1121,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '2px solid #eee' }}>
         <TabButton active={activeTab === 'by-member'} onClick={() => setActiveTab('by-member')} label="👤 수납관리" />
         <TabButton active={activeTab === 'by-course'} onClick={() => setActiveTab('by-course')} label="🎯 강좌별 보기" />
-        <TabButton active={activeTab === 'unpaid'} onClick={() => setActiveTab('unpaid')} label={`⚠️ 미납자 점검${allUnpaid.length > 0 ? ` (${allUnpaid.length})` : ''}`} />
+        <TabButton active={activeTab === 'unpaid'} onClick={() => setActiveTab('unpaid')} label={`⚠️ 미납자 점검${unpaidOnlyCount > 0 ? ` (${unpaidOnlyCount})` : ''}`} />
       </div>
 
       {/* 연도 선택 (모든 탭 공통) */}
@@ -1570,69 +1717,198 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           {activeTab === 'unpaid' && (
             <div style={{ background: 'white', borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
               <div style={{ marginBottom: 16 }}>
-                <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>⚠️ 전체 미납자 ({allUnpaid.length}건)</h3>
-                <p style={{ fontSize: 12, color: '#888', margin: 0 }}>
-                  매월 15~24일 점검 시 활용하세요. 미납자 종료 처리 후 대기자에게 연락할 수 있습니다.
+                <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>⚠️ 미납자 점검</h3>
+                <p style={{ fontSize: 12, color: '#888', margin: 0, lineHeight: 1.5 }}>
+                  <strong>{baseYear}년 {baseMonth}월 출석부</strong>에 있는 회원 중 <strong>{checkYear}년 {checkMonth}월 수강료</strong> 납부 현황입니다.<br />
+                  매월 15~24일에 다음 달 수강료 납부 점검 시 활용하세요. 종료/환불 회원도 한눈에 표시됩니다.
                 </p>
               </div>
 
-              {allUnpaid.length === 0 ? (
-                <p style={{ color: '#888', fontSize: 13, padding: 20, textAlign: 'center' }}>미납자가 없습니다. 👍</p>
-              ) : (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
-                      <th style={thStyle}>회원</th>
-                      <th style={thStyle}>연락처</th>
-                      <th style={thStyle}>강좌</th>
-                      <th style={thStyle}>미납 월</th>
-                      <th style={thStyle}>대기자</th>
-                      <th style={thStyle}>관리</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allUnpaid.map(({ course, enrollment, waitingCount, unpaidMonths }) => {
-                      const member = enrollment.members;
-                      if (!member) return null;
+              {/* 조회 월 선택 */}
+              <div style={{
+                background: '#f9f9f9', borderRadius: 8, padding: 12, marginBottom: 12,
+                display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+              }}>
+                <strong style={{ fontSize: 13, color: '#555' }}>조회 월:</strong>
+                <select value={checkYear} onChange={(e) => setCheckYear(parseInt(e.target.value, 10))} style={{ padding: '6px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13 }}>
+                  {[baseYear - 1, baseYear, baseYear + 1].map(y => <option key={y} value={y}>{y}년</option>)}
+                </select>
+                <select value={checkMonth} onChange={(e) => setCheckMonth(parseInt(e.target.value, 10))} style={{ padding: '6px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13 }}>
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
+                    <option key={m} value={m}>{m}월</option>
+                  ))}
+                </select>
+                <span style={{ fontSize: 12, color: '#888' }}>
+                  ※ 기준: {baseYear}년 {baseMonth}월 출석부 (검색일 기준)
+                </span>
+              </div>
 
-                      return (
-                        <tr key={enrollment.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                          <td style={tdStyle}>
-                            <Link href={`/members/${enrollment.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
-                              <strong>{member.name}</strong>
+              {/* 강좌 다중 선택 */}
+              <div style={{
+                background: '#f9f9f9', borderRadius: 8, padding: 12, marginBottom: 12,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: 13, color: '#555' }}>강좌 선택:</strong>
+                  <button
+                    onClick={() => setUnpaidCourseFilter(new Set())}
+                    style={{
+                      padding: '4px 10px', fontSize: 12, borderRadius: 6,
+                      background: unpaidCourseFilter.size === 0 ? '#185FA5' : 'white',
+                      color: unpaidCourseFilter.size === 0 ? 'white' : '#555',
+                      border: '1px solid ' + (unpaidCourseFilter.size === 0 ? '#185FA5' : '#ddd'),
+                      cursor: 'pointer', fontWeight: 500,
+                    }}
+                  >전체</button>
+                  <span style={{ fontSize: 12, color: '#888' }}>또는 개별 선택:</span>
+                </div>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {courses.filter(c => !c.is_free).map(c => (
+                    <label
+                      key={c.id}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                        background: unpaidCourseFilter.has(c.id) ? '#7B3FBF' : 'white',
+                        color: unpaidCourseFilter.has(c.id) ? 'white' : '#333',
+                        border: '1px solid ' + (unpaidCourseFilter.has(c.id) ? '#7B3FBF' : '#ddd'),
+                        fontSize: 12,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={unpaidCourseFilter.has(c.id)}
+                        onChange={() => toggleUnpaidCourseFilter(c.id)}
+                        style={{ display: 'none' }}
+                      />
+                      {c.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* 요약 + 다운로드 */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 12,
+              }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <span style={{ padding: '6px 12px', background: '#555', color: 'white', borderRadius: 6, fontSize: 13 }}>
+                    전체 {totalCount}명
+                  </span>
+                  <span style={{ padding: '6px 12px', background: '#1D9E75', color: 'white', borderRadius: 6, fontSize: 13 }}>
+                    ✅ 납부 {paidCount}명
+                  </span>
+                  <span style={{ padding: '6px 12px', background: '#A32D2D', color: 'white', borderRadius: 6, fontSize: 13 }}>
+                    ❌ 미납 {unpaidOnlyCount}명
+                  </span>
+                  {endedCount > 0 && (
+                    <span style={{ padding: '6px 12px', background: '#888', color: 'white', borderRadius: 6, fontSize: 13 }}>
+                      🛑 종료 {endedCount}명
+                    </span>
+                  )}
+                  {refundCount > 0 && (
+                    <span style={{ padding: '6px 12px', background: '#BA7517', color: 'white', borderRadius: 6, fontSize: 13 }}>
+                      💰 환불 {refundCount}명
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={downloadUnpaidExcel}
+                  disabled={totalCount === 0}
+                  style={{
+                    padding: '8px 16px', background: totalCount === 0 ? '#ccc' : '#185FA5', color: 'white',
+                    border: 'none', borderRadius: 6,
+                    cursor: totalCount === 0 ? 'not-allowed' : 'pointer',
+                    fontSize: 13, fontWeight: 500,
+                  }}
+                  title="전체/납부완료/미납 3개 시트로 다운로드"
+                >
+                  📥 엑셀 다운로드 (3시트)
+                </button>
+              </div>
+
+              {/* 결과 */}
+              {checkMonth === 1 && (
+                <div style={{
+                  padding: 16, background: '#FFF8E1', border: '1px solid #FFE082',
+                  borderRadius: 8, fontSize: 13, color: '#5D4037',
+                }}>
+                  ℹ️ 1월은 OT 기간으로 수강료를 받지 않습니다. 다른 월을 선택해주세요.
+                </div>
+              )}
+
+              {checkMonth !== 1 && totalCount === 0 && (
+                <p style={{ color: '#888', fontSize: 13, padding: 30, textAlign: 'center' }}>
+                  해당 조건에 맞는 회원이 없습니다.
+                </p>
+              )}
+
+              {checkMonth !== 1 && totalCount > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  {unpaidByCourse.map(({ course, rows }) => {
+                    const cPaid = rows.filter(r => r.status === 'paid').length;
+                    const cUnpaid = rows.filter(r => r.status === 'unpaid').length;
+                    const cEnded = rows.filter(r => r.status === 'ended').length;
+                    const cRefund = rows.filter(r => r.status === 'refund' || r.status === 'carryover').length;
+                    return (
+                      <div key={course.id} style={{ border: '1px solid #eee', borderRadius: 8, overflow: 'hidden' }}>
+                        <div style={{ background: '#fafafa', padding: '10px 14px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                          <div>
+                            <Link href={`/courses/${course.id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
+                              <strong style={{ fontSize: 14 }}>{course.name}</strong>
                             </Link>
-                          </td>
-                          <td style={tdStyle}>{member.phone || '-'}</td>
-                          <td style={tdStyle}>
-                            <Link href={`/courses/${course.id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{course.name}</Link>
-                          </td>
-                          <td style={tdStyle}>
-                            <strong style={{ color: '#A32D2D' }}>
-                              {unpaidMonths.map(m => `${m}월`).join(', ')}
-                            </strong>
-                          </td>
-                          <td style={tdStyle}>
-                            {waitingCount > 0 ? (
-                              <span style={{ ...badgeStyle('#BA7517') }}>대기 {waitingCount}명</span>
-                            ) : (<span style={{ color: '#888', fontSize: 12 }}>없음</span>)}
-                          </td>
-                          <td style={tdStyle}>
-                            <button onClick={() => {
-                              const result = memberSearchResults.length > 0 ? memberSearchResults[0] : null;
-                              const fakeResult: MemberSearchResult = {
-                                id: member.id, name: member.name, phone: member.phone,
-                                region_type: member.region_type, is_jung_gu: member.is_jung_gu,
-                                is_discount_50: member.is_discount_50, is_discount_100: member.is_discount_100,
-                              };
-                              selectMember(fakeResult);
-                              setActiveTab('by-member');
-                            }} style={smallBtnStyle}>수납관리</button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                            <span style={{ marginLeft: 8, fontSize: 12, color: '#888' }}>
+                              {baseYear}.{baseMonth} 출석부 {rows.length}명
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', gap: 4, fontSize: 11 }}>
+                            <span style={{ padding: '2px 8px', background: '#E8F5E9', color: '#1D9E75', borderRadius: 4 }}>납부 {cPaid}</span>
+                            {cUnpaid > 0 && <span style={{ padding: '2px 8px', background: '#FCEBEB', color: '#A32D2D', borderRadius: 4 }}>미납 {cUnpaid}</span>}
+                            {cEnded > 0 && <span style={{ padding: '2px 8px', background: '#eee', color: '#666', borderRadius: 4 }}>종료 {cEnded}</span>}
+                            {cRefund > 0 && <span style={{ padding: '2px 8px', background: '#FFF3E0', color: '#BA7517', borderRadius: 4 }}>환불 {cRefund}</span>}
+                          </div>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid #eee', background: '#fcfcfc' }}>
+                              <th style={thStyle}>회원</th>
+                              <th style={thStyle}>연락처</th>
+                              <th style={thStyle}>상태</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map(r => {
+                              const statusInfo = (() => {
+                                switch (r.status) {
+                                  case 'paid': return { label: '✅ 납부완료', color: '#1D9E75', bg: '#E8F5E9' };
+                                  case 'unpaid': return { label: '❌ 미납', color: '#A32D2D', bg: '#FCEBEB' };
+                                  case 'ended': return { label: '🛑 수강종료', color: '#666', bg: '#eee' };
+                                  case 'refund': return { label: '💰 환불', color: '#BA7517', bg: '#FFF3E0' };
+                                  case 'carryover': return { label: '💰 환불(이월)', color: '#BA7517', bg: '#FFF3E0' };
+                                }
+                              })();
+                              return (
+                                <tr key={r.enrollment.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                                  <td style={tdStyle}>
+                                    <Link href={`/members/${r.enrollment.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
+                                      <strong>{r.member.name}</strong>
+                                    </Link>
+                                  </td>
+                                  <td style={tdStyle}>{r.member.phone || '-'}</td>
+                                  <td style={tdStyle}>
+                                    <span style={{
+                                      padding: '2px 10px', background: statusInfo.bg, color: statusInfo.color,
+                                      borderRadius: 4, fontSize: 12, fontWeight: 500,
+                                    }}>{statusInfo.label}</span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
 
               <div style={{
@@ -1640,11 +1916,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                 background: '#FFF8E1', border: '1px solid #FFE082',
                 borderRadius: 6, fontSize: 12, color: '#5D4037',
               }}>
-                <strong>💡 안내</strong>
+                <strong>💡 사용 안내</strong>
                 <ul style={{ margin: '6px 0 0', paddingLeft: 20, lineHeight: 1.6 }}>
-                  <li><strong>수납관리</strong>: 해당 회원의 연간 수납 화면으로 이동하여 결제/환불/이월 처리</li>
-                  <li><strong>안내 문자 발송 시</strong>: 강좌별로 이름·연락처를 확인하여 발송하세요</li>
-                  <li><strong>대기자가 있는 경우</strong>: 미납자 정리 후 대기자에게 연락하여 자리 채우기</li>
+                  <li><strong>기준</strong>: 검색일이 속한 달의 출석부 (= 그 달 수강료를 낸 사람)</li>
+                  <li><strong>조회 월</strong>: 납부 여부를 확인하고 싶은 달 (보통 다음 달)</li>
+                  <li><strong>엑셀</strong>: 전체/납부완료/미납 3개 시트로 다운로드</li>
+                  <li><strong>안내 문자</strong>: "미납" 상태인 회원에게만 보내세요 (종료/환불 제외)</li>
                 </ul>
               </div>
             </div>
