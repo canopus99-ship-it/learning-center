@@ -61,23 +61,25 @@ export default async function LessonAttendancePage({ params }: { params: { cours
             </div>
           </Link>
 
-          <div style={{
-            background: '#E6F1FB', border: '2px solid #B5D4F4',
-            borderRadius: 12, padding: 24, textAlign: 'center',
-          }}>
-            <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
-            <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>출석 체크</h3>
-            <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>
-              스케줄대로 출석/결석을 체크합니다
-            </p>
-            <span style={{
-              display: 'inline-block', padding: '6px 12px',
-              background: '#ccc', color: 'white', borderRadius: 6,
-              fontSize: 12,
+          <Link href={`/attendance/lesson/${course.id}/today`} style={{ textDecoration: 'none', color: 'inherit' }}>
+            <div style={{
+              background: '#E6F1FB', border: '2px solid #B5D4F4',
+              borderRadius: 12, padding: 24, textAlign: 'center', cursor: 'pointer',
             }}>
-              🚧 준비 중 (D단계)
-            </span>
-          </div>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>✅</div>
+              <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>오늘 출석 체크</h3>
+              <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>
+                오늘 레슨 목록을 시간대별로 보고 출석을 체크합니다
+              </p>
+              <span style={{
+                display: 'inline-block', padding: '6px 12px',
+                background: '#185FA5', color: 'white', borderRadius: 6,
+                fontSize: 12, fontWeight: 500,
+              }}>
+                출석 체크 →
+              </span>
+            </div>
+          </Link>
         </div>
 
         <div style={{
@@ -86,7 +88,7 @@ export default async function LessonAttendancePage({ params }: { params: { cours
           borderRadius: 8, fontSize: 13, color: '#5D4037', lineHeight: 1.6,
         }}>
           <strong>💡 안내</strong><br />
-          스케줄 등록에서 수강생별 레슨 시간을 캘린더에 등록할 수 있습니다. 출석 체크 기능은 다음 단계(D)에서 추가됩니다.
+          스케줄 관리에서 수강생별 고정 레슨 시간을 등록하세요. 등록 후 오늘 출석 체크에서 시간대별로 출석을 체크할 수 있습니다.
         </div>
       </div>
     </div>
