@@ -85,6 +85,11 @@ export default function CoursesClient() {
   const [name, setName] = useState('');
   const [instructorId, setInstructorId] = useState<string>('');
   const [subInstructorId, setSubInstructorId] = useState<string>('');
+  // 강사 자동완성
+  const [instrQuery, setInstrQuery] = useState('');
+  const [subInstrQuery, setSubInstrQuery] = useState('');
+  const [instrOpen, setInstrOpen] = useState(false);
+  const [subInstrOpen, setSubInstrOpen] = useState(false);
   const [isLesson, setIsLesson] = useState(false);
   const [classroom, setClassroom] = useState('');
   const [capacity, setCapacity] = useState('20');
@@ -210,6 +215,7 @@ export default function CoursesClient() {
 
   function resetForm() {
     setCategory('문화강좌'); setName(''); setInstructorId(''); setSubInstructorId(''); setIsLesson(false);
+    setInstrQuery(''); setSubInstrQuery('');
     setClassroom(''); setCapacity('20');
     setOperationType('regular');
     setOperationMonths([...ALL_MONTHS]);
@@ -498,23 +504,101 @@ export default function CoursesClient() {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-            <div>
+            {/* 주강사 자동완성 */}
+            <div style={{ position: 'relative' }}>
               <label style={labelStyle}>주강사</label>
-              <select value={instructorId} onChange={(e) => setInstructorId(e.target.value)} style={inputStyle}>
-                <option value="">(미정)</option>
-                {activeInstructors.map(i => (
-                  <option key={i.id} value={i.id}>{i.name}</option>
-                ))}
-              </select>
+              <input
+                value={instrQuery}
+                onChange={e => {
+                  setInstrQuery(e.target.value);
+                  setInstrOpen(true);
+                  if (!e.target.value) setInstructorId('');
+                }}
+                onFocus={() => setInstrOpen(true)}
+                onBlur={() => setTimeout(() => setInstrOpen(false), 150)}
+                placeholder="이름 입력..."
+                style={inputStyle}
+                autoComplete="off"
+              />
+              {instrOpen && instrQuery && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                  background: 'white', border: '1px solid #ddd', borderRadius: 6,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto',
+                }}>
+                  {activeInstructors
+                    .filter(i => i.name.toLowerCase().includes(instrQuery.toLowerCase()))
+                    .map(i => (
+                      <div
+                        key={i.id}
+                        onMouseDown={() => {
+                          setInstructorId(String(i.id));
+                          setInstrQuery(i.name);
+                          setInstrOpen(false);
+                        }}
+                        style={{
+                          padding: '9px 12px', cursor: 'pointer', fontSize: 14,
+                          background: String(i.id) === instructorId ? '#F0F4FF' : 'white',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
+                        onMouseLeave={e => (e.currentTarget.style.background = String(i.id) === instructorId ? '#F0F4FF' : 'white')}
+                      >
+                        {i.name}
+                      </div>
+                    ))}
+                  {activeInstructors.filter(i => i.name.toLowerCase().includes(instrQuery.toLowerCase())).length === 0 && (
+                    <div style={{ padding: '9px 12px', fontSize: 13, color: '#aaa' }}>검색 결과 없음</div>
+                  )}
+                </div>
+              )}
             </div>
-            <div>
+            {/* 보조강사 자동완성 */}
+            <div style={{ position: 'relative' }}>
               <label style={labelStyle}>보조강사 (선택)</label>
-              <select value={subInstructorId} onChange={(e) => setSubInstructorId(e.target.value)} style={inputStyle}>
-                <option value="">(없음)</option>
-                {activeInstructors.filter(i => String(i.id) !== instructorId).map(i => (
-                  <option key={i.id} value={i.id}>{i.name}</option>
-                ))}
-              </select>
+              <input
+                value={subInstrQuery}
+                onChange={e => {
+                  setSubInstrQuery(e.target.value);
+                  setSubInstrOpen(true);
+                  if (!e.target.value) setSubInstructorId('');
+                }}
+                onFocus={() => setSubInstrOpen(true)}
+                onBlur={() => setTimeout(() => setSubInstrOpen(false), 150)}
+                placeholder="이름 입력..."
+                style={inputStyle}
+                autoComplete="off"
+              />
+              {subInstrOpen && subInstrQuery && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                  background: 'white', border: '1px solid #ddd', borderRadius: 6,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto',
+                }}>
+                  {activeInstructors
+                    .filter(i => String(i.id) !== instructorId && i.name.toLowerCase().includes(subInstrQuery.toLowerCase()))
+                    .map(i => (
+                      <div
+                        key={i.id}
+                        onMouseDown={() => {
+                          setSubInstructorId(String(i.id));
+                          setSubInstrQuery(i.name);
+                          setSubInstrOpen(false);
+                        }}
+                        style={{
+                          padding: '9px 12px', cursor: 'pointer', fontSize: 14,
+                          background: String(i.id) === subInstructorId ? '#F0F4FF' : 'white',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
+                        onMouseLeave={e => (e.currentTarget.style.background = String(i.id) === subInstructorId ? '#F0F4FF' : 'white')}
+                      >
+                        {i.name}
+                      </div>
+                    ))}
+                  {activeInstructors.filter(i => String(i.id) !== instructorId && i.name.toLowerCase().includes(subInstrQuery.toLowerCase())).length === 0 && (
+                    <div style={{ padding: '9px 12px', fontSize: 13, color: '#aaa' }}>검색 결과 없음</div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           {activeInstructors.length === 0 && (

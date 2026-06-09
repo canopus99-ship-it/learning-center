@@ -103,6 +103,10 @@ export default function CourseDetailClient({
   const [editName, setEditName] = useState(course.name);
   const [editInstructorId, setEditInstructorId] = useState<string>(course.instructor_id ? String(course.instructor_id) : '');
   const [editSubInstructorId, setEditSubInstructorId] = useState<string>(course.sub_instructor_id ? String(course.sub_instructor_id) : '');
+  const [editInstrQuery, setEditInstrQuery] = useState<string>('');
+  const [editSubInstrQuery, setEditSubInstrQuery] = useState<string>('');
+  const [editInstrOpen, setEditInstrOpen] = useState(false);
+  const [editSubInstrOpen, setEditSubInstrOpen] = useState(false);
   const [editIsLesson, setEditIsLesson] = useState<boolean>(!!course.is_lesson);
   const [editClassroom, setEditClassroom] = useState(course.classroom || '');
   const [editCapacity, setEditCapacity] = useState(String(course.capacity));
@@ -279,6 +283,7 @@ export default function CourseDetailClient({
     setEditCategory(course.category); setEditName(course.name);
     setEditInstructorId(course.instructor_id ? String(course.instructor_id) : '');
     setEditSubInstructorId(course.sub_instructor_id ? String(course.sub_instructor_id) : '');
+    setEditInstrQuery(''); setEditSubInstrQuery('');
     setEditIsLesson(!!course.is_lesson);
     setEditClassroom(course.classroom || ''); setEditCapacity(String(course.capacity));
     setEditIsFree(course.is_free); setEditFeeJungGu(String(course.fee_jung_gu));
@@ -645,23 +650,108 @@ export default function CourseDetailClient({
               </label>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
-              <div>
+              {/* 주강사 자동완성 */}
+              <div style={{ position: 'relative' }}>
                 <label style={labelStyle}>주강사</label>
-                <select value={editInstructorId} onChange={(e) => setEditInstructorId(e.target.value)} style={inputStyle} aria-label="주강사">
-                  <option value="">(미정)</option>
-                  {activeInstructors.map(i => (
-                    <option key={i.id} value={i.id}>{i.name}{!i.is_active && ' (비활동)'}</option>
-                  ))}
-                </select>
+                <input
+                  value={editInstrQuery || (editInstructorId ? (instructorMap.get(parseInt(editInstructorId, 10)) || '') : '')}
+                  onChange={e => {
+                    setEditInstrQuery(e.target.value);
+                    setEditInstrOpen(true);
+                    if (!e.target.value) setEditInstructorId('');
+                  }}
+                  onFocus={e => { if (!editInstrQuery) setEditInstrQuery(e.target.value); setEditInstrOpen(true); }}
+                  onBlur={() => setTimeout(() => setEditInstrOpen(false), 150)}
+                  placeholder="이름 입력..."
+                  style={inputStyle}
+                  autoComplete="off"
+                />
+                {editInstrOpen && (
+                  <div style={{
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                    background: 'white', border: '1px solid #ddd', borderRadius: 6,
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto',
+                  }}>
+                    {activeInstructors
+                      .filter(i => {
+                        const q = editInstrQuery.toLowerCase();
+                        return !q || i.name.toLowerCase().includes(q);
+                      })
+                      .map(i => (
+                        <div
+                          key={i.id}
+                          onMouseDown={() => {
+                            setEditInstructorId(String(i.id));
+                            setEditInstrQuery(i.name);
+                            setEditInstrOpen(false);
+                          }}
+                          style={{
+                            padding: '9px 12px', cursor: 'pointer', fontSize: 14,
+                            background: String(i.id) === editInstructorId ? '#F0F4FF' : 'white',
+                          }}
+                          onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
+                          onMouseLeave={e => (e.currentTarget.style.background = String(i.id) === editInstructorId ? '#F0F4FF' : 'white')}
+                        >
+                          {i.name}{!i.is_active && ' (비활동)'}
+                        </div>
+                      ))}
+                    {activeInstructors.filter(i => { const q = editInstrQuery.toLowerCase(); return !q || i.name.toLowerCase().includes(q); }).length === 0 && (
+                      <div style={{ padding: '9px 12px', fontSize: 13, color: '#aaa' }}>검색 결과 없음</div>
+                    )}
+                  </div>
+                )}
               </div>
-              <div>
+              {/* 보조강사 자동완성 */}
+              <div style={{ position: 'relative' }}>
                 <label style={labelStyle}>보조강사 (선택)</label>
-                <select value={editSubInstructorId} onChange={(e) => setEditSubInstructorId(e.target.value)} style={inputStyle} aria-label="보조강사">
-                  <option value="">(없음)</option>
-                  {activeInstructors.filter(i => String(i.id) !== editInstructorId).map(i => (
-                    <option key={i.id} value={i.id}>{i.name}{!i.is_active && ' (비활동)'}</option>
-                  ))}
-                </select>
+                <input
+                  value={editSubInstrQuery || (editSubInstructorId ? (instructorMap.get(parseInt(editSubInstructorId, 10)) || '') : '')}
+                  onChange={e => {
+                    setEditSubInstrQuery(e.target.value);
+                    setEditSubInstrOpen(true);
+                    if (!e.target.value) setEditSubInstructorId('');
+                  }}
+                  onFocus={e => { if (!editSubInstrQuery) setEditSubInstrQuery(e.target.value); setEditSubInstrOpen(true); }}
+                  onBlur={() => setTimeout(() => setEditSubInstrOpen(false), 150)}
+                  placeholder="이름 입력..."
+                  style={inputStyle}
+                  autoComplete="off"
+                />
+                {editSubInstrOpen && (
+                  <div style={{
+                    position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
+                    background: 'white', border: '1px solid #ddd', borderRadius: 6,
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto',
+                  }}>
+                    {activeInstructors
+                      .filter(i => {
+                        if (String(i.id) === editInstructorId) return false;
+                        const q = editSubInstrQuery.toLowerCase();
+                        return !q || i.name.toLowerCase().includes(q);
+                      })
+                      .map(i => (
+                        <div
+                          key={i.id}
+                          onMouseDown={() => {
+                            setEditSubInstructorId(String(i.id));
+                            setEditSubInstrQuery(i.name);
+                            setEditSubInstrOpen(false);
+                          }}
+                          style={{
+                            padding: '9px 12px', cursor: 'pointer', fontSize: 14,
+                            background: String(i.id) === editSubInstructorId ? '#F0F4FF' : 'white',
+                          }}
+                          onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
+                          onMouseLeave={e => (e.currentTarget.style.background = String(i.id) === editSubInstructorId ? '#F0F4FF' : 'white')}
+                        >
+                          {i.name}{!i.is_active && ' (비활동)'}
+                        </div>
+                      ))}
+                    {activeInstructors.filter(i => { if (String(i.id) === editInstructorId) return false; const q = editSubInstrQuery.toLowerCase(); return !q || i.name.toLowerCase().includes(q); }).length === 0 && (
+                      <div style={{ padding: '9px 12px', fontSize: 13, color: '#aaa' }}>검색 결과 없음</div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
