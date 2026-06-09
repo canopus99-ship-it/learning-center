@@ -80,6 +80,26 @@ export default async function LessonAttendancePage({ params }: { params: { cours
               </span>
             </div>
           </Link>
+
+          <Link href={`/attendance/lesson/${course.id}/print`} style={{ textDecoration: 'none', color: 'inherit' }}>
+            <div style={{
+              background: '#F0FBF7', border: '2px solid #9FE1CB',
+              borderRadius: 12, padding: 24, textAlign: 'center', cursor: 'pointer',
+            }}>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>📄</div>
+              <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>출력</h3>
+              <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>
+                출석부(복지관 제출용) · 스케줄표(레슨실 부착용)
+              </p>
+              <span style={{
+                display: 'inline-block', padding: '6px 12px',
+                background: '#0F6E56', color: 'white', borderRadius: 6,
+                fontSize: 12, fontWeight: 500,
+              }}>
+                출력 →
+              </span>
+            </div>
+          </Link>
         </div>
 
         <div style={{
