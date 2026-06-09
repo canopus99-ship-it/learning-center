@@ -35,24 +35,12 @@ export default async function LessonSchedulePage({ params }: { params: { courseI
     members: Array.isArray(e.members) ? (e.members[0] || null) : (e.members || null),
   }));
 
-  // 결제 데이터 (결제 완료자 판단용)
-  const enrollmentIds = enrollments.map(e => e.id);
-  let payments: any[] = [];
-  if (enrollmentIds.length > 0) {
-    const { data: payData } = await supabase
-      .from('payments')
-      .select('enrollment_id, payment_year, payment_month, is_paid, refund_date')
-      .in('enrollment_id', enrollmentIds);
-    payments = payData || [];
-  }
-
   return (
     <div>
       <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
       <LessonScheduleClient
         course={course as any}
         enrollments={enrollments as any}
-        payments={payments}
       />
     </div>
   );
