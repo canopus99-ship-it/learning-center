@@ -1302,7 +1302,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   <span style={{ fontSize: 11, color: '#888', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                                     최초수강월
                                     <select
-                                      value={(enrollment.start_year === selectedYear && enrollment.start_month) ? enrollment.start_month : ''}
+                                      value={enrollment.start_month ?? ''}
                                       onChange={(ev) => {
                                         const m = parseInt(ev.target.value, 10);
                                         if (m) updateStartMonth(enrollment.id, selectedYear, m);
@@ -1310,7 +1310,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                       style={{ fontSize: 11, padding: '1px 2px', border: '1px solid #ddd', borderRadius: 4 }}
                                     >
                                       <option value="">-</option>
-                                      {months.map(m => <option key={m} value={m}>{selectedYear}.{m}월</option>)}
+                                      {months.map(m => <option key={m} value={m}>{m}월</option>)}
                                     </select>
                                   </span>
                                 </div>
@@ -1637,7 +1637,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                       const p = getPayment(e.id, selectedMonth);
                       return !p || !p.is_paid;
                     })
-                  : courseEnrollments;
+                  : courseEnrollments.filter(e => !isBeforeStartMonth(e, selectedYear, selectedMonth));
 
                 if (showUnpaidOnly && displayEnrollments.length === 0) return null;
 

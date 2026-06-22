@@ -148,6 +148,7 @@ export default function CourseDetailClient({
 
   // 수강신청 추가
   const [showEnrollForm, setShowEnrollForm] = useState(false);
+  const [enrollStartMonth, setEnrollStartMonth] = useState(new Date().getMonth() + 1);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLevelId, setSelectedLevelId] = useState<string>(''); // 등급 강좌용
   const [searchResults, setSearchResults] = useState<MemberSearchResult[]>([]);
@@ -470,7 +471,7 @@ export default function CourseDetailClient({
           status, waiting_order: waitingOrder,
           enrolled_at: new Date().toISOString(), ended_at: null,
           end_reason: null, refund_date: null, refund_memo: null,
-          start_year: new Date().getFullYear(), start_month: new Date().getMonth() + 1,
+          start_year: new Date().getFullYear(), start_month: enrollStartMonth,
           ...(course.use_levels ? { course_level_id: courseLevelId } : {}),
         }).eq('id', existing.id);
         alert(`${memberName}님이 ${status === 'waiting' ? '대기 명단에 추가' : '수강신청'}되었습니다!`);
@@ -486,7 +487,7 @@ export default function CourseDetailClient({
     const waitingOrder = status === 'waiting' ? (waitingList.length + 1) : null;
     const newEnrollment: any = {
       member_id: memberId, course_id: course.id, status, waiting_order: waitingOrder,
-      start_year: new Date().getFullYear(), start_month: new Date().getMonth() + 1,
+      start_year: new Date().getFullYear(), start_month: enrollStartMonth,
     };
     if (course.use_levels) {
       newEnrollment.course_level_id = courseLevelId;
@@ -1036,6 +1037,14 @@ export default function CourseDetailClient({
         {showEnrollForm && (
           <div style={{ background: '#f9f9f9', padding: 16, borderRadius: 8, marginBottom: 16, border: '1px solid #eee' }}>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 8px' }}>회원을 검색해서 수강신청을 추가하세요</p>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: '#185FA5' }}>수강 시작월</label>
+              <select value={enrollStartMonth} onChange={(e) => setEnrollStartMonth(parseInt(e.target.value, 10))} style={{ ...inputStyle, width: 110 }}>
+                {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}월</option>)}
+              </select>
+              <span style={{ fontSize: 12, color: '#888' }}>이 월부터 수강 시작 · 이전 달은 회색(신청전)</span>
+            </div>
 
             {course.use_levels && (
               <div style={{

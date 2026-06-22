@@ -180,6 +180,7 @@ export default function MemberDetailClient({
   // 강좌 추가 모달
   const [showAddCourse, setShowAddCourse] = useState(false);
   const [courseSearchQuery, setCourseSearchQuery] = useState('');
+  const [enrollStartMonth, setEnrollStartMonth] = useState(new Date().getMonth() + 1);
   const [courseSearchResults, setCourseSearchResults] = useState<CourseSearchResult[]>([]);
   const [courseSearching, setCourseSearching] = useState(false);
   // 등급 강좌의 선택된 등급 ID 매핑 (course_id → level_id)
@@ -433,7 +434,7 @@ export default function MemberDetailClient({
         enrolled_at: new Date().toISOString(),
         ended_at: null,
         start_year: new Date().getFullYear(),
-        start_month: new Date().getMonth() + 1,
+        start_month: enrollStartMonth,
       };
       if (useLevels) updateData.course_level_id = courseLevelId;
 
@@ -460,7 +461,7 @@ export default function MemberDetailClient({
       status,
       waiting_order: waitingOrder,
       start_year: new Date().getFullYear(),
-      start_month: new Date().getMonth() + 1,
+      start_month: enrollStartMonth,
     };
     if (useLevels) insertData.course_level_id = courseLevelId;
 
@@ -760,6 +761,13 @@ export default function MemberDetailClient({
         {showAddCourse && (
           <div style={{ background: '#f9f9f9', padding: 16, borderRadius: 8, marginBottom: 16, border: '1px solid #eee' }}>
             <p style={{ fontSize: 13, color: '#666', margin: '0 0 8px' }}>강좌명으로 검색하세요 (운영중인 강좌만)</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: '#185FA5' }}>수강 시작월</label>
+              <select value={enrollStartMonth} onChange={(e) => setEnrollStartMonth(parseInt(e.target.value, 10))} style={{ ...inputStyle, width: 110, flex: 'none' }}>
+                {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}월</option>)}
+              </select>
+              <span style={{ fontSize: 12, color: '#888' }}>이 월부터 수강 시작 · 이전 달은 회색(신청전)</span>
+            </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <input
                 type="text"
