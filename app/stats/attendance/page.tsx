@@ -1,0 +1,16 @@
+import { redirect } from 'next/navigation';
+import { getCurrentStaff } from '@/lib/auth';
+import TopBar from '@/components/TopBar';
+import AttendanceStatsClient from './AttendanceStatsClient';
+
+export default async function AttendanceStatsPage() {
+  const staff = await getCurrentStaff();
+  if (!staff) redirect('/login?error=no_access');
+
+  return (
+    <div>
+      <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
+      <AttendanceStatsClient />
+    </div>
+  );
+}

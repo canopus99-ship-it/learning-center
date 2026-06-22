@@ -34,6 +34,12 @@ export default async function StatsHomePage() {
             description="신규 가입·성별·연령대·중구민·감면 분포"
             icon="👥"
           />
+          <MenuCard
+            href="/stats/attendance"
+            title="출석률 조회"
+            description="기간별 회원·강좌 출석률 (감면·무료 자격 확인용)"
+            icon="📋"
+          />
         </div>
 
         <div style={{
