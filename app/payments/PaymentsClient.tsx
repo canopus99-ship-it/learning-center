@@ -825,8 +825,35 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       if (error) { hasError = true; console.error('이월 처리 실패:', error); }
     }
 
+    // 이월된 회원을 대기명단으로 편입 (이월 신청순으로 대기순번 부여)
+    const carriedEnrollmentIds = new Set<number>();
+    for (const it of items) {
+      const enr = enrollments.find(e => e.member_id === selectedMember?.id && e.course_id === it.courseId);
+      if (enr && enr.status !== 'waiting') carriedEnrollmentIds.add(enr.id);
+    }
+    const waitingCountByCourse = new Map<number, number>();
+    for (const enr of enrollments) {
+      if (enr.status === 'waiting') {
+        waitingCountByCourse.set(enr.course_id, (waitingCountByCourse.get(enr.course_id) || 0) + 1);
+      }
+    }
+    let movedToWaiting = 0;
+    for (const enrId of carriedEnrollmentIds) {
+      const enr = enrollments.find(e => e.id === enrId);
+      if (!enr) continue;
+      const nextOrder = (waitingCountByCourse.get(enr.course_id) || 0) + 1;
+      waitingCountByCourse.set(enr.course_id, nextOrder);
+      const { error } = await supabase.from('enrollments').update({
+        status: 'waiting',
+        waiting_order: nextOrder,
+        carryover_date: carryoverDate,
+      }).eq('id', enrId);
+      if (error) { hasError = true; console.error('대기 편입 실패:', error); }
+      else movedToWaiting++;
+    }
+
     if (hasError) alert('일부 이월 처리에 실패했습니다.');
-    else alert(`${items.length}건 이월 처리되었습니다.`);
+    else alert(`${items.length}건 이월 처리되었습니다.${movedToWaiting > 0 ? `\n${movedToWaiting}명이 대기명단으로 이동했습니다.` : ''}`);
 
     setCarryoverModalOpen(false);
     setSelectedCells(new Set());

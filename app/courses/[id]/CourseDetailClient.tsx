@@ -47,6 +47,7 @@ type Enrollment = {
   end_reason: string | null;
   refund_date: string | null;
   refund_memo: string | null;
+  carryover_date: string | null;
   memo: string | null;
   course_level_id?: number | null;
   members: MemberInEnrollment | null;
@@ -73,6 +74,15 @@ const DAYS = [
   { value: 4, label: '목' }, { value: 5, label: '금' }, { value: 6, label: '토' },
   { value: 7, label: '일' },
 ];
+
+// 이월 후 경과 개월 수 (3개월 초과 경고용)
+function carryoverMonthsElapsed(dateStr: string | null): number | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  return (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+}
 
 export default function CourseDetailClient({
   course: initialCourse,
@@ -514,6 +524,7 @@ export default function CourseDetailClient({
     const updates: any = { status: newStatus };
     if (newStatus === 'active') {
       updates.waiting_order = null;
+      updates.carryover_date = null;
       // 대기 → 수강중 전환 등 정상 케이스
     } else if (newStatus === 'waiting') {
       updates.waiting_order = waitingList.length + 1;
@@ -1203,6 +1214,19 @@ export default function CourseDetailClient({
                     <td style={tdStyle}><strong style={{ color: '#BA7517' }}>{e.waiting_order}</strong></td>
                     <td style={tdStyle}>
                       <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{e.members?.name}</Link>
+                      {(() => {
+                        const m = carryoverMonthsElapsed(e.carryover_date);
+                        if (m === null) return null;
+                        const over = m >= 3;
+                        return (
+                          <span style={{
+                            marginLeft: 6, fontSize: 11, padding: '1px 6px', borderRadius: 4,
+                            background: over ? '#A32D2D' : '#7B3FBF', color: 'white', whiteSpace: 'nowrap',
+                          }}>
+                            {over ? `⚠ 이월 ${m}개월 (3개월 초과)` : `이월 ${m}개월차`}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td style={tdStyle}>{e.members?.phone || '-'}</td>
                     <td style={tdStyle}>{e.enrolled_at?.substring(0, 10)}</td>
