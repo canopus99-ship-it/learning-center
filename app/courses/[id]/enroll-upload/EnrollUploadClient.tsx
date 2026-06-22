@@ -269,6 +269,8 @@ export default function EnrollUploadClient({ course, levels }: { course: Course;
           course_id: course.id,
           status: 'active',
           enrolled_at: today,
+          start_year: new Date().getFullYear(),
+          start_month: new Date().getMonth() + 1,
         };
         if (useLevels) data.course_level_id = r.courseLevelId;
         return data;

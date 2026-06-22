@@ -178,7 +178,39 @@ export function isEndedAtMonth(
 /**
  * 셀 상태 결정 (등록/미등록/미납/수강종료/운영X)
  */
-export type CellStatus = 'paid' | 'unregistered' | 'unpaid' | 'ended' | 'not_operating';
+export type CellStatus = 'paid' | 'unregistered' | 'unpaid' | 'ended' | 'not_operating' | 'before_enrollment';
+
+/**
+ * 특정 월이 회원의 "최초수강월" 이전(= 신청전)인지 판정
+ *
+ * 신청전 = 강좌는 운영하지만 이 회원이 아직 신청하지 않았던 달.
+ *          미납도 미등록도 아니며, 회색으로 표시하고 모든 통계에서 제외한다.
+ *
+ * 판정 기준:
+ *  - start_year/start_month가 있으면 그 값 기준
+ *  - 없으면(구버전 데이터) enrolled_at의 연·월로 폴백
+ *  - 둘 다 없으면 막지 않음(false) = 기존 동작 유지
+ */
+export function isBeforeStartMonth(
+  enrollment: {
+    start_year?: number | null;
+    start_month?: number | null;
+    enrolled_at?: string | null;
+  },
+  year: number,
+  month: number
+): boolean {
+  let sy = enrollment.start_year ?? null;
+  let sm = enrollment.start_month ?? null;
+  if ((sy === null || sm === null) && enrollment.enrolled_at) {
+    sy = parseInt(enrollment.enrolled_at.substring(0, 4), 10);
+    sm = parseInt(enrollment.enrolled_at.substring(5, 7), 10);
+  }
+  if (sy === null || sm === null) return false;
+  if (year < sy) return true;
+  if (year > sy) return false;
+  return month < sm;
+}
 
 export function getCellStatus(
   isPaid: boolean,

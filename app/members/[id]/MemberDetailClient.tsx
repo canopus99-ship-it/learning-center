@@ -432,6 +432,8 @@ export default function MemberDetailClient({
         waiting_order: waitingOrder,
         enrolled_at: new Date().toISOString(),
         ended_at: null,
+        start_year: new Date().getFullYear(),
+        start_month: new Date().getMonth() + 1,
       };
       if (useLevels) updateData.course_level_id = courseLevelId;
 
@@ -457,6 +459,8 @@ export default function MemberDetailClient({
       course_id: courseId,
       status,
       waiting_order: waitingOrder,
+      start_year: new Date().getFullYear(),
+      start_month: new Date().getMonth() + 1,
     };
     if (useLevels) insertData.course_level_id = courseLevelId;
 

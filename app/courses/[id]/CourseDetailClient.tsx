@@ -470,6 +470,7 @@ export default function CourseDetailClient({
           status, waiting_order: waitingOrder,
           enrolled_at: new Date().toISOString(), ended_at: null,
           end_reason: null, refund_date: null, refund_memo: null,
+          start_year: new Date().getFullYear(), start_month: new Date().getMonth() + 1,
           ...(course.use_levels ? { course_level_id: courseLevelId } : {}),
         }).eq('id', existing.id);
         alert(`${memberName}님이 ${status === 'waiting' ? '대기 명단에 추가' : '수강신청'}되었습니다!`);
@@ -485,6 +486,7 @@ export default function CourseDetailClient({
     const waitingOrder = status === 'waiting' ? (waitingList.length + 1) : null;
     const newEnrollment: any = {
       member_id: memberId, course_id: course.id, status, waiting_order: waitingOrder,
+      start_year: new Date().getFullYear(), start_month: new Date().getMonth() + 1,
     };
     if (course.use_levels) {
       newEnrollment.course_level_id = courseLevelId;

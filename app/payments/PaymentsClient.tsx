@@ -10,6 +10,7 @@ import {
   isAnnualAvailable,
   parseOperationMonths,
   isEndedAtMonth,
+  isBeforeStartMonth,
   type PaymentMethod,
   type EndReason,
 } from '@/lib/payments';
@@ -57,6 +58,9 @@ type Enrollment = {
   end_date: string | null;
   end_from_year: number | null;
   end_from_month: number | null;
+  start_year: number | null;
+  start_month: number | null;
+  enrolled_at: string | null;
   refund_date: string | null;
   course_level_id?: number | null;
   members: Member | null;
@@ -201,6 +205,19 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setPayments(paymentsRes.data || []);
     setCourseLevels(levelsRes.data || []);
     setLoading(false);
+  }
+
+  // 최초수강월 변경 (신청전/미납 판정 기준)
+  async function updateStartMonth(enrollmentId: number, year: number, month: number) {
+    const { error } = await supabase
+      .from('enrollments')
+      .update({ start_year: year, start_month: month })
+      .eq('id', enrollmentId);
+    if (error) {
+      alert('최초수강월 변경 실패: ' + error.message);
+    } else {
+      loadData();
+    }
   }
 
   function getPayment(enrollmentId: number, month: number): Payment | null {
@@ -873,6 +890,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         ? courseEnrollments.filter(e => {
             if (!e.members) return false;
             if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
+            if (isBeforeStartMonth(e, selectedYear, selectedMonth)) return false;
             if (selectedMonth === 1) return false;
             const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
             if (calc.amount === 0) return false;
@@ -892,6 +910,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
         let statusLabel = '';
         if (p?.is_paid) statusLabel = '등록';
+        else if (isBeforeStartMonth(e, selectedYear, selectedMonth)) statusLabel = '신청전';
         else if (isAutoComplete && pastOrCurrent) statusLabel = '자동등록';
         else if (pastOrCurrent && !isOTMonth) statusLabel = '미납';
         else statusLabel = isOTMonth ? '미등록(OT)' : '미등록';
@@ -1280,6 +1299,20 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                       ✓ 수강중
                                     </span>
                                   )}
+                                  <span style={{ fontSize: 11, color: '#888', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                                    최초수강월
+                                    <select
+                                      value={(enrollment.start_year === selectedYear && enrollment.start_month) ? enrollment.start_month : ''}
+                                      onChange={(ev) => {
+                                        const m = parseInt(ev.target.value, 10);
+                                        if (m) updateStartMonth(enrollment.id, selectedYear, m);
+                                      }}
+                                      style={{ fontSize: 11, padding: '1px 2px', border: '1px solid #ddd', borderRadius: 4 }}
+                                    >
+                                      <option value="">-</option>
+                                      {months.map(m => <option key={m} value={m}>{selectedYear}.{m}월</option>)}
+                                    </select>
+                                  </span>
                                 </div>
                                 <div style={{ display: 'flex', gap: 4 }}>
                                   {isCourseEnded ? (
@@ -1350,6 +1383,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     bgColor = '#1D9E75';
                                     textColor = 'white';
                                     canSelect = true; // 수정도 가능
+                                  } else if (isBeforeStartMonth(enrollment, selectedYear, month)) {
+                                    // 신청전: 최초수강월 이전 = 회색, 라벨 없음, 결제 불가
+                                    label = '';
+                                    bgColor = '#ededed';
+                                    textColor = '#ccc';
+                                    canSelect = false;
                                   } else if (calc.amount === 0 && pastOrCurrent) {
                                     // 무료/100%감면이면 자동 등록
                                     label = '등록';
@@ -1591,6 +1630,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                   ? courseEnrollments.filter(e => {
                       if (!isOperating || !e.members) return false;
                       if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
+                      if (isBeforeStartMonth(e, selectedYear, selectedMonth)) return false;
                       if (selectedMonth === 1) return false;
                       const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
                       if (calc.amount === 0) return false;
@@ -1657,6 +1697,9 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                             if (p?.is_paid) {
                               statusLabel = '✓ 등록';
                               statusColor = '#1D9E75';
+                            } else if (isBeforeStartMonth(e, selectedYear, selectedMonth)) {
+                              statusLabel = '신청전';
+                              statusColor = '#bbb';
                             } else if (isAutoComplete && pastOrCurrent) {
                               statusLabel = '자동등록';
                               statusColor = '#1D9E75';
