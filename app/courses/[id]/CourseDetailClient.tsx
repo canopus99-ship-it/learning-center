@@ -6,7 +6,11 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { DAY_LABELS, FREQUENCY_LABELS, generateRegularDates, type SessionConfig } from '@/lib/courseDates';
 import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus } from '@/lib/enrollment';
-import { END_REASON_LABELS, END_REASON_COLORS } from '@/lib/payments';
+import {
+  END_REASON_LABELS, END_REASON_COLORS,
+  isBeforeStartMonth, isEndedAtMonth, parseOperationMonths,
+  getCellStatus, type CellStatus,
+} from '@/lib/payments';
 
 type Course = {
   id: number; category: string; name: string;
@@ -50,7 +54,18 @@ type Enrollment = {
   carryover_date: string | null;
   memo: string | null;
   course_level_id?: number | null;
+  start_year?: number | null;
+  start_month?: number | null;
+  end_date?: string | null;
   members: MemberInEnrollment | null;
+};
+
+type MonthlyPayment = {
+  enrollment_id: number;
+  payment_year: number;
+  payment_month: number;
+  is_paid: boolean;
+  status_type: string | null;
 };
 
 type MemberSearchResult = {
@@ -164,6 +179,12 @@ export default function CourseDetailClient({
   const [searchResults, setSearchResults] = useState<MemberSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
 
+  // 월별 조회 state
+  const [showMonthlyView, setShowMonthlyView] = useState(false);
+  const [monthlyViewMonth, setMonthlyViewMonth] = useState(new Date().getMonth() + 1);
+  const [monthlyPayments, setMonthlyPayments] = useState<MonthlyPayment[]>([]);
+  const [monthlyLoading, setMonthlyLoading] = useState(false);
+
   // (수강 종료 관련 state 제거됨 - 수강 종료는 수납관리 또는 회원관리에서 처리)
 
   const instructorMap = new Map(instructors.map(i => [i.id, i.name]));
@@ -184,6 +205,27 @@ export default function CourseDetailClient({
       .select('*, members(id, name, phone, birth_date, region_type)')
       .eq('course_id', course.id);
     setEnrollments((data as Enrollment[]) || []);
+  }
+
+  async function loadMonthlyPayments(month: number) {
+    setMonthlyLoading(true);
+    const year = new Date().getFullYear();
+    const enrollmentIds = enrollments
+      .filter(e => e.status === 'active' || e.status === 'paused')
+      .map(e => e.id);
+    if (enrollmentIds.length === 0) {
+      setMonthlyPayments([]);
+      setMonthlyLoading(false);
+      return;
+    }
+    const { data } = await supabase
+      .from('payments')
+      .select('enrollment_id, payment_year, payment_month, is_paid, status_type')
+      .in('enrollment_id', enrollmentIds)
+      .eq('payment_year', year)
+      .eq('payment_month', month);
+    setMonthlyPayments((data as MonthlyPayment[]) || []);
+    setMonthlyLoading(false);
   }
 
   async function reloadSessions() {
@@ -1031,7 +1073,22 @@ export default function CourseDetailClient({
             수강생 명단 (수강중 {activeList.length}명 / 대기 {waitingList.length}명)
             {isFull && <span style={{ marginLeft: 8, fontSize: 11, padding: '2px 8px', background: '#A32D2D', color: 'white', borderRadius: 4 }}>정원 마감</span>}
           </h2>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => {
+                const next = !showMonthlyView;
+                setShowMonthlyView(next);
+                if (next) loadMonthlyPayments(monthlyViewMonth);
+              }}
+              style={{
+                padding: '8px 14px', fontSize: 13, borderRadius: 6,
+                background: showMonthlyView ? '#BA7517' : 'white',
+                color: showMonthlyView ? 'white' : '#BA7517',
+                border: '1px solid #BA7517', cursor: 'pointer', fontWeight: 500,
+              }}
+            >
+              📋 {showMonthlyView ? '월별조회 닫기' : '월별 조회'}
+            </button>
             <Link href={`/courses/${course.id}/enroll-upload`} style={{
               padding: '8px 14px', fontSize: 13, borderRadius: 6,
               background: '#1D9E75', color: 'white',
@@ -1044,6 +1101,125 @@ export default function CourseDetailClient({
             </button>
           </div>
         </div>
+
+        {showMonthlyView && (() => {
+          const year = new Date().getFullYear();
+          const opMonths = parseOperationMonths(course.operation_months);
+          const isOperating = opMonths.includes(monthlyViewMonth);
+          const now = new Date();
+          const isPastOrCurrent = year < now.getFullYear() || (year === now.getFullYear() && monthlyViewMonth <= now.getMonth() + 1);
+
+          const monthlyList = activeList.filter(e => {
+            if (isBeforeStartMonth(e, year, monthlyViewMonth)) return false;
+            if (isEndedAtMonth(e, year, monthlyViewMonth)) return false;
+            return true;
+          });
+
+          const paymentMap = new Map(monthlyPayments.map(p => [p.enrollment_id, p]));
+
+          type Row = { enrollment: typeof activeList[0]; status: CellStatus };
+          const rows: Row[] = monthlyList.map(e => {
+            const pmt = paymentMap.get(e.id);
+            const isEnded = isEndedAtMonth(e, year, monthlyViewMonth);
+            const isPaid = !!(pmt && pmt.is_paid && pmt.status_type !== 'refunded');
+            const cellStatus = getCellStatus(isPaid, isOperating, isEnded, isPastOrCurrent, 0);
+            return { enrollment: e, status: cellStatus };
+          });
+
+          const CELL_COLORS: Record<CellStatus, { bg: string; color: string; label: string }> = {
+            paid:             { bg: '#E8F5E9', color: '#1D9E75', label: '등록' },
+            unpaid:           { bg: '#FDECEA', color: '#A32D2D', label: '미납' },
+            unregistered:     { bg: '#fff',    color: '#888',    label: '미등록' },
+            ended:            { bg: '#222',    color: '#fff',    label: '수강종료' },
+            not_operating:    { bg: '#eee',    color: '#aaa',    label: '운영X' },
+            before_enrollment:{ bg: '#f0f0f0', color: '#bbb',    label: '신청전' },
+          };
+
+          const paidCount   = rows.filter(r => r.status === 'paid').length;
+          const unpaidCount = rows.filter(r => r.status === 'unpaid').length;
+          const unregCount  = rows.filter(r => r.status === 'unregistered').length;
+
+          return (
+            <div style={{ background: '#FFFBF0', border: '1px solid #F0D98A', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: 14, color: '#BA7517' }}>📋 월별 수강 현황</strong>
+                <select
+                  value={monthlyViewMonth}
+                  onChange={e => {
+                    const m = parseInt(e.target.value, 10);
+                    setMonthlyViewMonth(m);
+                    loadMonthlyPayments(m);
+                  }}
+                  style={{ ...inputStyle, width: 90, padding: '6px 8px' }}
+                >
+                  {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
+                    <option key={m} value={m}>{m}월</option>
+                  ))}
+                </select>
+                <span style={{ fontSize: 12, color: '#888' }}>{year}년</span>
+                {!isOperating && (
+                  <span style={{ fontSize: 12, padding: '2px 8px', background: '#eee', color: '#888', borderRadius: 4 }}>
+                    이 달은 운영하지 않는 강좌입니다
+                  </span>
+                )}
+                <span style={{ fontSize: 12, color: '#555', marginLeft: 'auto' }}>
+                  등록 <strong style={{ color: '#1D9E75' }}>{paidCount}</strong>명 ·{' '}
+                  미납 <strong style={{ color: '#A32D2D' }}>{unpaidCount}</strong>명 ·{' '}
+                  미등록 <strong style={{ color: '#888' }}>{unregCount}</strong>명
+                </span>
+              </div>
+              {monthlyLoading ? (
+                <p style={{ fontSize: 13, color: '#888' }}>불러오는 중...</p>
+              ) : monthlyList.length === 0 ? (
+                <p style={{ fontSize: 13, color: '#888' }}>해당 월에 수강중인 회원이 없습니다.</p>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #e8d88a', background: '#FFF8DC' }}>
+                      <th style={thStyle}>이름</th>
+                      <th style={thStyle}>연락처</th>
+                      <th style={thStyle}>거주구분</th>
+                      {course.use_levels && <th style={thStyle}>등급</th>}
+                      <th style={thStyle}>수납상태</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(({ enrollment: e, status }) => {
+                      const { bg, color, label } = CELL_COLORS[status];
+                      const levelName = e.course_level_id ? (levels.find(lv => lv.id === e.course_level_id)?.level_name || '-') : '-';
+                      return (
+                        <tr key={e.id} style={{ borderBottom: '1px solid #f5ecc0' }}>
+                          <td style={tdStyle}>
+                            <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
+                              <strong>{e.members?.name}</strong>
+                            </Link>
+                          </td>
+                          <td style={tdStyle}>{e.members?.phone || '-'}</td>
+                          <td style={tdStyle}>{e.members?.region_type || '-'}</td>
+                          {course.use_levels && (
+                            <td style={tdStyle}>
+                              <span style={{ fontSize: 11, padding: '2px 8px', background: '#7B3FBF', color: 'white', borderRadius: 4 }}>
+                                {levelName}
+                              </span>
+                            </td>
+                          )}
+                          <td style={tdStyle}>
+                            <span style={{ display: 'inline-block', padding: '2px 10px', background: bg, color, borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+                              {label}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+              <p style={{ fontSize: 11, color: '#aaa', margin: '10px 0 0' }}>
+                ※ 읽기 전용 · 수납 처리는 수납관리 화면에서
+              </p>
+            </div>
+          );
+        })()}
 
         {showEnrollForm && (
           <div style={{ background: '#f9f9f9', padding: 16, borderRadius: 8, marginBottom: 16, border: '1px solid #eee' }}>
