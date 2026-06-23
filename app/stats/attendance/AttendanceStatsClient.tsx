@@ -13,8 +13,14 @@ type Enrollment = {
 type Member = { id: number; name: string; is_discount_50: boolean; is_discount_100: boolean };
 type CourseDate = { id: number; course_id: number; class_date: string; is_cancelled: boolean };
 type AttendanceRow = { enrollment_id: number; course_date_id: number; is_present: boolean };
+type LessonFixed = { enrollment_id: number; course_id: number };
+type LessonAtt = { course_id: number; enrollment_id: number; attend_date: string; is_attended: boolean };
 
-// 월의 시작일/말일 (YYYY-MM-DD)
+type Row = {
+  memberId: number; memberName: string; courseName: string; category: string;
+  discount: '무료' | '감면' | ''; attended: number; operating: number; rate: number; isLesson: boolean;
+};
+
 function monthBounds(y: number, m: number): { start: string; end: string } {
   const start = `${y}-${String(m).padStart(2, '0')}-01`;
   const lastDay = new Date(y, m, 0).getDate();
@@ -37,6 +43,8 @@ export default function AttendanceStatsClient() {
   const [members, setMembers] = useState<Member[]>([]);
   const [courseDates, setCourseDates] = useState<CourseDate[]>([]);
   const [present, setPresent] = useState<AttendanceRow[]>([]);
+  const [lessonFixed, setLessonFixed] = useState<LessonFixed[]>([]);
+  const [lessonAtt, setLessonAtt] = useState<LessonAtt[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -46,14 +54,15 @@ export default function AttendanceStatsClient() {
     if (start > end) { alert('시작월이 종료월보다 뒤입니다.'); return; }
     setLoading(true);
 
-    const [coursesRes, enrollRes, membersRes, datesRes] = await Promise.all([
+    const [coursesRes, enrollRes, membersRes, datesRes, lessonFixedRes, lessonAttRes] = await Promise.all([
       supabase.from('courses').select('id, category, name').order('category').order('name'),
       supabase.from('enrollments').select('id, member_id, course_id, status, enrolled_at, end_date, start_year, start_month'),
       supabase.from('members').select('id, name, is_discount_50, is_discount_100'),
       supabase.from('course_dates').select('id, course_id, class_date, is_cancelled').gte('class_date', start).lte('class_date', end),
+      supabase.from('lesson_fixed_schedules').select('enrollment_id, course_id'),
+      supabase.from('lesson_attendance').select('course_id, enrollment_id, attend_date, is_attended').gte('attend_date', start).lte('attend_date', end),
     ]);
 
-    // 출석(present) 조회: course_date_id 청크로 나눠서
     const dateIds = (datesRes.data || []).map(d => d.id);
     const presentRows: AttendanceRow[] = [];
     for (let i = 0; i < dateIds.length; i += 200) {
@@ -72,11 +81,13 @@ export default function AttendanceStatsClient() {
     setMembers((membersRes.data || []) as Member[]);
     setCourseDates(datesRes.data || []);
     setPresent(presentRows);
+    setLessonFixed((lessonFixedRes.data || []) as LessonFixed[]);
+    setLessonAtt((lessonAttRes.data || []) as LessonAtt[]);
     setLoading(false);
     setLoaded(true);
   }
 
-  const rows = useMemo(() => {
+  const rows = useMemo<Row[]>(() => {
     if (!loaded) return [];
     const periodStart = monthBounds(fromYear, fromMonth).start;
     const periodEnd = monthBounds(toYear, toMonth).end;
@@ -84,7 +95,7 @@ export default function AttendanceStatsClient() {
     const courseMap = new Map(courses.map(c => [c.id, c]));
     const memberMap = new Map(members.map(m => [m.id, m]));
 
-    // 강좌별 운영 회차(취소 제외) 목록
+    // 일반 강좌: 운영 회차(취소 제외)
     const datesByCourse = new Map<number, CourseDate[]>();
     courseDates.forEach(d => {
       if (d.is_cancelled) return;
@@ -92,8 +103,6 @@ export default function AttendanceStatsClient() {
       arr.push(d);
       datesByCourse.set(d.course_id, arr);
     });
-
-    // 수강신청별 출석한 course_date_id 집합
     const presentByEnroll = new Map<number, Set<number>>();
     present.forEach(p => {
       const s = presentByEnroll.get(p.enrollment_id) || new Set<number>();
@@ -101,18 +110,46 @@ export default function AttendanceStatsClient() {
       presentByEnroll.set(p.enrollment_id, s);
     });
 
-    const result: Array<{
-      memberId: number; memberName: string; courseName: string; category: string;
-      discount: '무료' | '감면' | ''; attended: number; operating: number; rate: number;
-    }> = [];
+    // 레슨: 주간 횟수(고정 레슨 수), 강좌별 운영일수, 회원별 출석 횟수
+    const freqByEnroll = new Map<number, number>();
+    lessonFixed.forEach(f => freqByEnroll.set(f.enrollment_id, (freqByEnroll.get(f.enrollment_id) || 0) + 1));
+    const lessonDaysByCourse = new Map<number, Set<string>>();
+    const lessonAttendedByEnroll = new Map<number, number>();
+    lessonAtt.forEach(a => {
+      if (!a.is_attended) return;
+      const s = lessonDaysByCourse.get(a.course_id) || new Set<string>();
+      s.add(a.attend_date);
+      lessonDaysByCourse.set(a.course_id, s);
+      lessonAttendedByEnroll.set(a.enrollment_id, (lessonAttendedByEnroll.get(a.enrollment_id) || 0) + 1);
+    });
+
+    const result: Row[] = [];
 
     enrollments.forEach(e => {
-      if (e.status === 'waiting') return; // 대기자는 제외
+      if (e.status === 'waiting') return;
       const member = memberMap.get(e.member_id);
       const course = courseMap.get(e.course_id);
       if (!member || !course) return;
 
-      // 회원의 수강 활동 구간 (기간 ∩ 최초수강월~종료일)
+      const discount: '무료' | '감면' | '' =
+        member.is_discount_100 ? '무료' : member.is_discount_50 ? '감면' : '';
+
+      // 레슨 학생: 고정 레슨이 있으면 레슨 방식 (예정 = 운영일수 × 주간횟수 ÷ 5)
+      const freq = freqByEnroll.get(e.id);
+      if (freq && freq > 0) {
+        const D = lessonDaysByCourse.get(e.course_id)?.size ?? 0;
+        const operating = Math.round((D * freq) / 5);
+        if (operating === 0) return;
+        const attended = lessonAttendedByEnroll.get(e.id) ?? 0;
+        const rate = Math.round((attended / operating) * 100);
+        result.push({
+          memberId: member.id, memberName: member.name, courseName: course.name,
+          category: course.category, discount, attended, operating, rate, isLesson: true,
+        });
+        return;
+      }
+
+      // 일반 강좌
       const memberStart =
         (e.start_year && e.start_month)
           ? `${e.start_year}-${String(e.start_month).padStart(2, '0')}-01`
@@ -124,28 +161,23 @@ export default function AttendanceStatsClient() {
       const courseDatesList = datesByCourse.get(e.course_id) || [];
       const operatingDates = courseDatesList.filter(d => d.class_date >= activeStart && d.class_date <= activeEnd);
       const operating = operatingDates.length;
-      if (operating === 0) return; // 운영 회차 없으면 출석률 무의미
+      if (operating === 0) return;
 
       const presentSet = presentByEnroll.get(e.id) || new Set<number>();
       const attended = operatingDates.filter(d => presentSet.has(d.id)).length;
       const rate = Math.round((attended / operating) * 100);
 
-      const discount: '무료' | '감면' | '' =
-        member.is_discount_100 ? '무료' : member.is_discount_50 ? '감면' : '';
-
       result.push({
         memberId: member.id, memberName: member.name, courseName: course.name,
-        category: course.category, discount, attended, operating, rate,
+        category: course.category, discount, attended, operating, rate, isLesson: false,
       });
     });
 
     const filtered = discountOnly ? result.filter(r => r.discount !== '') : result;
-    // 출석률 낮은 순으로 정렬 (확인이 필요한 사람부터)
     filtered.sort((a, b) => a.rate - b.rate || a.memberName.localeCompare(b.memberName));
     return filtered;
-  }, [loaded, courses, enrollments, members, courseDates, present, fromYear, fromMonth, toYear, toMonth, discountOnly]);
+  }, [loaded, courses, enrollments, members, courseDates, present, lessonFixed, lessonAtt, fromYear, fromMonth, toYear, toMonth, discountOnly]);
 
-  // 최초 1회 자동 조회
   useEffect(() => { loadData(); /* eslint-disable-next-line */ }, []);
 
   const lowCount = rows.filter(r => r.rate < 50).length;
@@ -164,9 +196,9 @@ export default function AttendanceStatsClient() {
       }}>
         감면 자격 확인용 화면입니다. <strong>출석률과 감면 여부</strong>만 표시되며, 구체적 감면 사유는 표시하지 않습니다.
         별도 명단으로 저장하지 않고 조회할 때마다 계산합니다. (운영세칙 제12조 2항: 감면자 분기 출석률 50% 이하 시 감면 종료 검토)
+        <br />※ 레슨은 예정 회차 = 운영일수 × (주간횟수 ÷ 5)로 산출한 근사치입니다.
       </div>
 
-      {/* 기간 + 필터 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
         <select value={fromYear} onChange={e => setFromYear(+e.target.value)} style={selectStyle}>
           {years.map(y => <option key={y} value={y}>{y}년</option>)}
@@ -203,7 +235,7 @@ export default function AttendanceStatsClient() {
             <th style={th}>이름</th>
             <th style={th}>강좌</th>
             <th style={th}>감면</th>
-            <th style={{ ...th, textAlign: 'center' }}>출석/운영</th>
+            <th style={{ ...th, textAlign: 'center' }}>출석/예정</th>
             <th style={{ ...th, textAlign: 'right' }}>출석률</th>
           </tr>
         </thead>
@@ -215,6 +247,7 @@ export default function AttendanceStatsClient() {
               </td>
               <td style={td}>
                 <span style={{ color: '#888', fontSize: 11 }}>{r.category} </span>{r.courseName}
+                {r.isLesson && <span style={{ marginLeft: 6, fontSize: 10, padding: '1px 5px', borderRadius: 4, background: '#E8DEF8', color: '#5B3FA0' }}>레슨</span>}
               </td>
               <td style={td}>
                 {r.discount && (
