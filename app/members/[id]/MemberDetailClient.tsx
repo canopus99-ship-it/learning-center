@@ -560,6 +560,12 @@ export default function MemberDetailClient({
 
   async function handleDeleteEnrollment(e: Enrollment) {
     if (!confirm(`${e.courses?.name} 수강 신청을 취소(완전 삭제)하시겠습니까?\n\n결제·출석 기록도 함께 삭제됩니다.\n수강 종료(기록 보존)는 [수강 종료] 버튼을 사용하세요.`)) return;
+    // 연관 데이터 순서대로 삭제 (payments → enrollment)
+    // attendance는 course_date_id 기반이라 enrollment_id로 삭제
+    const { error: attErr } = await supabase.from('attendance').delete().eq('enrollment_id', e.id);
+    if (attErr) { alert('출석 기록 삭제 실패: ' + attErr.message); return; }
+    const { error: payErr } = await supabase.from('payments').delete().eq('enrollment_id', e.id);
+    if (payErr) { alert('결제 기록 삭제 실패: ' + payErr.message); return; }
     const { error } = await supabase.from('enrollments').delete().eq('id', e.id);
     if (error) alert('삭제 실패: ' + error.message);
     else reloadEnrollments();

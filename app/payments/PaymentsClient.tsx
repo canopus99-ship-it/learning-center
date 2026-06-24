@@ -1646,6 +1646,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                 const unpaidCount = courseEnrollments.filter(e => {
                   if (!isOperating || !e.members) return false;
                   if (isEndedAtMonth(e, selectedYear, selectedMonth)) return false;
+                  if (isBeforeStartMonth(e, selectedYear, selectedMonth)) return false; // 신청전 제외
                   if (selectedMonth === 1) return false; // 1월 OT 제외
                   const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
                   if (calc.amount === 0) return false;
