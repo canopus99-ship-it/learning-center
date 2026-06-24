@@ -1321,56 +1321,6 @@ export default function CourseDetailClient({
           </div>
         )}
 
-        {activeList.length === 0 ? (
-          <p style={{ color: '#888', fontSize: 13 }}>아직 수강생이 없습니다.</p>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 16 }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
-                <th style={thStyle}>이름</th>
-                <th style={thStyle}>연락처</th>
-                <th style={thStyle}>거주구분</th>
-                {course.use_levels && <th style={thStyle}>등급</th>}
-                <th style={thStyle}>상태</th>
-                <th style={thStyle}>신청일</th>
-                <th style={thStyle}>관리</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeList.map((e) => {
-                const levelName = e.course_level_id ? (levels.find(lv => lv.id === e.course_level_id)?.level_name || '-') : '-';
-                return (
-                  <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                    <td style={tdStyle}>
-                      <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
-                        <strong>{e.members?.name}</strong>
-                      </Link>
-                    </td>
-                    <td style={tdStyle}>{e.members?.phone || '-'}</td>
-                    <td style={tdStyle}>{e.members?.region_type || '-'}</td>
-                    {course.use_levels && (
-                      <td style={tdStyle}>
-                        {e.course_level_id ? (
-                          <span style={{ fontSize: 11, padding: '2px 8px', background: '#7B3FBF', color: 'white', borderRadius: 4 }}>
-                            {levelName}
-                          </span>
-                        ) : (
-                          <span style={{ color: '#A32D2D', fontSize: 11 }}>⚠ 미선택</span>
-                        )}
-                      </td>
-                    )}
-                    <td style={tdStyle}><span style={badgeStyle(STATUS_COLORS[e.status])}>{STATUS_LABELS[e.status]}</span></td>
-                    <td style={tdStyle}>{e.enrolled_at?.substring(0, 10)}</td>
-                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                      <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>수강신청 취소</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-
         {waitingList.length > 0 && (
           <div style={{ marginTop: 16 }}>
             <h3 style={{ fontSize: 14, margin: '0 0 8px', color: '#BA7517' }}>⏳ 대기 명단 ({waitingList.length}명)</h3>
@@ -1419,51 +1369,6 @@ export default function CourseDetailClient({
           </div>
         )}
 
-        {endedList.length > 0 && (
-          <details style={{ marginTop: 16 }}>
-            <summary style={{ cursor: 'pointer', fontSize: 13, color: '#888' }}>수강종료 명단 ({endedList.length}명) - 클릭해서 보기</summary>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 8 }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
-                  <th style={thStyle}>이름</th>
-                  <th style={thStyle}>종료 사유</th>
-                  <th style={thStyle}>종료일</th>
-                  <th style={thStyle}>환불 정보</th>
-                  <th style={thStyle}>관리</th>
-                </tr>
-              </thead>
-              <tbody>
-                {endedList.map((e) => (
-                  <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0', opacity: 0.7 }}>
-                    <td style={tdStyle}>
-                      <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{e.members?.name}</Link>
-                    </td>
-                    <td style={tdStyle}>
-                      {e.end_reason ? (
-                        <span style={badgeStyle((END_REASON_COLORS as any)[e.end_reason] || '#888')}>
-                          {(END_REASON_LABELS as any)[e.end_reason] || e.end_reason}
-                        </span>
-                      ) : '-'}
-                    </td>
-                    <td style={tdStyle}>{e.ended_at?.substring(0, 10)}</td>
-                    <td style={{ ...tdStyle, fontSize: 12 }}>
-                      {e.refund_date ? (
-                        <span>
-                          <strong>{e.refund_date}</strong>
-                          {e.refund_memo && <span style={{ color: '#888', marginLeft: 4 }}>· {e.refund_memo}</span>}
-                        </span>
-                      ) : '-'}
-                    </td>
-                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                      <button onClick={() => handleChangeStatus(e, 'active')} style={smallBtnStyle}>재신청</button>
-                      <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>삭제</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </details>
-        )}
       </div>
 
       <Link href={`/courses/${course.id}/dates`} style={{
