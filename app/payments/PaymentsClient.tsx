@@ -316,6 +316,18 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     return conflicts;
   }
 
+  // 최초수강월 이전(신청전) 달 — 연중에 연납을 적용할 때, 아직 시작 전인 달은 조용히 제외 (경고 불필요)
+  function getAnnualBeforeStartMonths(courseId: number): number[] {
+    if (!selectedMember) return [];
+    const enr = enrollments.find(e => e.member_id === selectedMember.id && e.course_id === courseId);
+    if (!enr) return [];
+    const result: number[] = [];
+    for (let m = 2; m <= 12; m++) {
+      if (isBeforeStartMonth(enr, selectedYear, m)) result.push(m);
+    }
+    return result;
+  }
+
   // 연납 토글
   function toggleAnnual(courseId: number) {
     setSelectedAnnualCourses(prev => {
@@ -332,9 +344,10 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         next.add(courseId);
         // 연납 선택 시 그 강좌의 2~12월 자동 선택 (1월은 OT라 제외, 이미 환불/이월된 달도 제외)
         const conflicts = getAnnualConflictMonths(courseId);
+        const beforeStart = getAnnualBeforeStartMonths(courseId);
         const newCells = new Set(selectedCells);
         for (let m = 2; m <= 12; m++) {
-          if (conflicts.includes(m)) continue;
+          if (conflicts.includes(m) || beforeStart.includes(m)) continue;
           newCells.add(cellKey(courseId, m));
         }
         setSelectedCells(newCells);
@@ -493,6 +506,13 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           // 이미 환불/이월 처리된 달은 연납으로 덮어쓰지 않고 건너뜀 (모르고 상태를 뒤섞는 것 방지)
           if (existing && (existing.status_type === 'refunded' || existing.status_type === 'carryover')) {
             errorMessages.push(`${course.name} ${m}월: 이미 환불/이월 처리된 달이라 건너뛰었습니다 (먼저 취소 처리 필요)`);
+            hasError = true;
+            continue;
+          }
+
+          // 연납을 연중에 적용하는 경우: 최초수강월 이전(신청전) 달에는 결제 기록을 만들지 않음
+          if (isBeforeStartMonth(enrollment, selectedYear, m)) {
+            errorMessages.push(`${course.name} ${m}월: 최초수강월 이전(신청전)이라 건너뛰었습니다`);
             hasError = true;
             continue;
           }

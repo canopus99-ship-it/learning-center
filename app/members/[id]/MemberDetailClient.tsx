@@ -176,6 +176,7 @@ export default function MemberDetailClient({
   };
   const [payments, setPayments] = useState<PaymentHistory[]>([]);
   const [paymentsLoading, setPaymentsLoading] = useState(true);
+  const [selectedReceiptIds, setSelectedReceiptIds] = useState<Set<number>>(new Set());
 
   // 강좌 추가 모달
   const [showAddCourse, setShowAddCourse] = useState(false);
@@ -998,9 +999,25 @@ export default function MemberDetailClient({
 
       {/* 결제 이력 */}
       <div style={{ background: 'white', borderRadius: 12, padding: 24, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-        <h2 style={{ fontSize: 16, margin: '0 0 16px' }}>
-          💰 결제 이력 ({payments.filter(p => p.is_paid).length}건)
-        </h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
+          <h2 style={{ fontSize: 16, margin: 0 }}>
+            💰 결제 이력 ({payments.filter(p => p.is_paid).length}건)
+          </h2>
+          {selectedReceiptIds.size > 0 && (
+            <button
+              onClick={() => {
+                window.open(`/payments/receipt?ids=${Array.from(selectedReceiptIds).join(',')}&member=${member.id}`, '_blank');
+              }}
+              style={{
+                padding: '8px 14px', fontSize: 13, borderRadius: 6,
+                background: 'white', color: '#185FA5',
+                border: '1px solid #185FA5', cursor: 'pointer', fontWeight: 500,
+              }}
+            >
+              🧾 선택 {selectedReceiptIds.size}건 영수증 출력
+            </button>
+          )}
+        </div>
         {paymentsLoading ? (
           <p style={{ color: '#888', fontSize: 13 }}>불러오는 중...</p>
         ) : payments.filter(p => p.is_paid).length === 0 ? (
@@ -1010,6 +1027,7 @@ export default function MemberDetailClient({
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
+                  <th style={thStyle}>선택</th>
                   <th style={thStyle}>강좌</th>
                   <th style={thStyle}>해당월</th>
                   <th style={thStyle}>납부금액</th>
@@ -1022,8 +1040,24 @@ export default function MemberDetailClient({
                 {payments.filter(p => p.is_paid).map(p => {
                   const isRefunded = !!p.refund_date;
                   const isTransferred = !!p.transfer_to_year;
+                  const receiptEligible = !isRefunded && !isTransferred;
                   return (
                     <tr key={p.id} style={{ borderBottom: '1px solid #f0f0f0', opacity: isRefunded ? 0.6 : 1 }}>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}>
+                        {receiptEligible && (
+                          <input
+                            type="checkbox"
+                            checked={selectedReceiptIds.has(p.id)}
+                            onChange={(e) => {
+                              setSelectedReceiptIds(prev => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(p.id); else next.delete(p.id);
+                                return next;
+                              });
+                            }}
+                          />
+                        )}
+                      </td>
                       <td style={tdStyle}><strong>{p.course_name}</strong></td>
                       <td style={tdStyle}>{p.payment_year}.{p.payment_month}월</td>
                       <td style={tdStyle}>{p.amount.toLocaleString()}원</td>
