@@ -301,6 +301,21 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     });
   }
 
+  // 연납 선택 시 이미 환불/이월 처리된 달이 있으면 연납 대상에서 제외 (모르고 덮어쓰는 것 방지)
+  function getAnnualConflictMonths(courseId: number): number[] {
+    if (!selectedMember) return [];
+    const enr = enrollments.find(e => e.member_id === selectedMember.id && e.course_id === courseId);
+    if (!enr) return [];
+    const conflicts: number[] = [];
+    for (let m = 2; m <= 12; m++) {
+      const p = getPayment(enr.id, m);
+      if (p && (p.status_type === 'refunded' || p.status_type === 'carryover')) {
+        conflicts.push(m);
+      }
+    }
+    return conflicts;
+  }
+
   // 연납 토글
   function toggleAnnual(courseId: number) {
     setSelectedAnnualCourses(prev => {
@@ -315,12 +330,20 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         setSelectedCells(newCells);
       } else {
         next.add(courseId);
-        // 연납 선택 시 그 강좌의 2~12월 자동 선택 (1월은 OT라 제외)
+        // 연납 선택 시 그 강좌의 2~12월 자동 선택 (1월은 OT라 제외, 이미 환불/이월된 달도 제외)
+        const conflicts = getAnnualConflictMonths(courseId);
         const newCells = new Set(selectedCells);
         for (let m = 2; m <= 12; m++) {
+          if (conflicts.includes(m)) continue;
           newCells.add(cellKey(courseId, m));
         }
         setSelectedCells(newCells);
+        if (conflicts.length > 0) {
+          alert(
+            `${conflicts.join(', ')}월은 이미 환불/이월 처리되어 있어 연납 대상에서 제외했습니다.\n` +
+            `해당 달을 다시 결제하려면 그 달 셀을 선택해 상세 화면에서 환불/이월 처리를 먼저 취소한 뒤 진행하세요.`
+          );
+        }
       }
       return next;
     });
@@ -442,6 +465,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
     let hasError = false;
     let successCount = 0;
+    const errorMessages: string[] = [];
 
     for (const item of items) {
       const course = courses.find(c => c.id === item.courseId);
@@ -465,6 +489,14 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
         for (let m = 2; m <= 12; m++) {
           const existing = getPayment(enrollment.id, m);
+
+          // 이미 환불/이월 처리된 달은 연납으로 덮어쓰지 않고 건너뜀 (모르고 상태를 뒤섞는 것 방지)
+          if (existing && (existing.status_type === 'refunded' || existing.status_type === 'carryover')) {
+            errorMessages.push(`${course.name} ${m}월: 이미 환불/이월 처리된 달이라 건너뛰었습니다 (먼저 취소 처리 필요)`);
+            hasError = true;
+            continue;
+          }
+
           const data = {
             enrollment_id: enrollment.id,
             payment_year: selectedYear,
@@ -489,7 +521,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
           if (result.error) {
             hasError = true;
-            console.error('연납 처리 실패:', result.error);
+            errorMessages.push(`${course.name} ${m}월: ${result.error.message}`);
+            console.error('연납 처리 실패:', m, '월', result.error);
           }
         }
         successCount++;
@@ -522,6 +555,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
         if (result.error) {
           hasError = true;
+          errorMessages.push(`${course.name} ${item.month}월: ${result.error.message}`);
           console.error('결제 처리 실패:', result.error);
         } else {
           successCount++;
@@ -530,7 +564,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     }
 
     if (hasError) {
-      alert('일부 결제 처리에 실패했습니다.');
+      // 실제 원인을 보여줘야 다음에 같은 오류가 나도 바로 진단할 수 있음 (기존엔 원인이 콘솔에만 찍히고 화면엔 안 보였음)
+      alert('일부 결제 처리에 실패했습니다.\n\n' + errorMessages.slice(0, 5).join('\n') + (errorMessages.length > 5 ? `\n...외 ${errorMessages.length - 5}건` : ''));
     } else {
       alert(`${selectedMember.name}님의 결제가 완료되었습니다.`);
     }
@@ -751,6 +786,23 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       }
     });
     return result;
+  }
+
+  // 영수증 발급 대상 payment id (정상 결제된 것만 — 환불/이월 제외)
+  function getReceiptEligiblePaymentIds(): number[] {
+    return getSelectedPaidItems()
+      .filter(it => it.payment.is_paid && it.payment.status_type !== 'refunded' && it.payment.status_type !== 'carryover')
+      .map(it => it.payment.id);
+  }
+
+  function openReceiptTab() {
+    if (!selectedMember) return;
+    const ids = getReceiptEligiblePaymentIds();
+    if (ids.length === 0) {
+      alert('선택한 항목 중 정상 결제된(영수증 발급 가능) 내역이 없습니다.');
+      return;
+    }
+    window.open(`/payments/receipt?ids=${ids.join(',')}&member=${selectedMember.id}`, '_blank');
   }
 
   // 환불 모달 열기
@@ -1574,6 +1626,14 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   border: 'none', borderRadius: 6, cursor: 'pointer',
                                   fontSize: 14, fontWeight: 500,
                                 }}>📦 이월</button>
+                                {getReceiptEligiblePaymentIds().length > 0 && (
+                                  <button onClick={openReceiptTab} style={{
+                                    padding: '12px 18px',
+                                    background: 'white', color: '#185FA5',
+                                    border: '1px solid #185FA5', borderRadius: 6, cursor: 'pointer',
+                                    fontSize: 14, fontWeight: 500,
+                                  }}>🧾 영수증</button>
+                                )}
                                 <button onClick={handleBulkDeletePayment} style={{
                                   padding: '12px 18px',
                                   background: '#A32D2D', color: 'white',
