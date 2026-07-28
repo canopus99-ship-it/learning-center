@@ -176,7 +176,7 @@ export default function MemberDetailClient({
   };
   const [payments, setPayments] = useState<PaymentHistory[]>([]);
   const [paymentsLoading, setPaymentsLoading] = useState(true);
-  const [selectedReceiptIds, setSelectedReceiptIds] = useState<Set<number>>(new Set());
+  const [selectedPaymentIds, setSelectedPaymentIds] = useState<Set<number>>(new Set());
 
   // 강좌 추가 모달
   const [showAddCourse, setShowAddCourse] = useState(false);
@@ -228,6 +228,21 @@ export default function MemberDetailClient({
     }));
     setPayments(enriched);
     setPaymentsLoading(false);
+  }
+
+  function togglePaymentSelect(paymentId: number) {
+    setSelectedPaymentIds(prev => {
+      const next = new Set(prev);
+      if (next.has(paymentId)) next.delete(paymentId);
+      else next.add(paymentId);
+      return next;
+    });
+  }
+
+  function openReceiptPrint() {
+    if (selectedPaymentIds.size === 0) return;
+    const ids = Array.from(selectedPaymentIds).join(',');
+    window.open(`/payments/receipt?ids=${ids}`, '_blank');
   }
 
   async function reloadEnrollments() {
@@ -999,25 +1014,9 @@ export default function MemberDetailClient({
 
       {/* 결제 이력 */}
       <div style={{ background: 'white', borderRadius: 12, padding: 24, marginBottom: 16, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
-          <h2 style={{ fontSize: 16, margin: 0 }}>
-            💰 결제 이력 ({payments.filter(p => p.is_paid).length}건)
-          </h2>
-          {selectedReceiptIds.size > 0 && (
-            <button
-              onClick={() => {
-                window.open(`/payments/receipt?ids=${Array.from(selectedReceiptIds).join(',')}&member=${member.id}`, '_blank');
-              }}
-              style={{
-                padding: '8px 14px', fontSize: 13, borderRadius: 6,
-                background: 'white', color: '#185FA5',
-                border: '1px solid #185FA5', cursor: 'pointer', fontWeight: 500,
-              }}
-            >
-              🧾 선택 {selectedReceiptIds.size}건 영수증 출력
-            </button>
-          )}
-        </div>
+        <h2 style={{ fontSize: 16, margin: '0 0 16px' }}>
+          💰 결제 이력 ({payments.filter(p => p.is_paid).length}건)
+        </h2>
         {paymentsLoading ? (
           <p style={{ color: '#888', fontSize: 13 }}>불러오는 중...</p>
         ) : payments.filter(p => p.is_paid).length === 0 ? (
@@ -1027,7 +1026,7 @@ export default function MemberDetailClient({
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
-                  <th style={thStyle}>선택</th>
+                  <th style={thStyle}></th>
                   <th style={thStyle}>강좌</th>
                   <th style={thStyle}>해당월</th>
                   <th style={thStyle}>납부금액</th>
@@ -1040,21 +1039,15 @@ export default function MemberDetailClient({
                 {payments.filter(p => p.is_paid).map(p => {
                   const isRefunded = !!p.refund_date;
                   const isTransferred = !!p.transfer_to_year;
-                  const receiptEligible = !isRefunded && !isTransferred;
+                  const canSelect = !isRefunded && !isTransferred;
                   return (
                     <tr key={p.id} style={{ borderBottom: '1px solid #f0f0f0', opacity: isRefunded ? 0.6 : 1 }}>
                       <td style={{ ...tdStyle, textAlign: 'center' }}>
-                        {receiptEligible && (
+                        {canSelect && (
                           <input
                             type="checkbox"
-                            checked={selectedReceiptIds.has(p.id)}
-                            onChange={(e) => {
-                              setSelectedReceiptIds(prev => {
-                                const next = new Set(prev);
-                                if (e.target.checked) next.add(p.id); else next.delete(p.id);
-                                return next;
-                              });
-                            }}
+                            checked={selectedPaymentIds.has(p.id)}
+                            onChange={() => togglePaymentSelect(p.id)}
                           />
                         )}
                       </td>
@@ -1084,7 +1077,7 @@ export default function MemberDetailClient({
             </table>
             <div style={{
               marginTop: 12, padding: 10, background: '#f5f5f5', borderRadius: 6,
-              fontSize: 12, color: '#666', display: 'flex', justifyContent: 'space-between',
+              fontSize: 12, color: '#666', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8,
             }}>
               <span>
                 <strong>총 납부:</strong> {payments.filter(p => p.is_paid && !p.refund_date).reduce((s, p) => s + p.amount, 0).toLocaleString()}원
@@ -1094,9 +1087,24 @@ export default function MemberDetailClient({
                   </span>
                 )}
               </span>
-              <Link href="/payments" style={{ color: '#185FA5', textDecoration: 'none' }}>
-                수납관리에서 보기 →
-              </Link>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <button
+                  onClick={openReceiptPrint}
+                  disabled={selectedPaymentIds.size === 0}
+                  style={{
+                    padding: '6px 14px', fontSize: 12, borderRadius: 6,
+                    background: selectedPaymentIds.size === 0 ? '#eee' : 'white',
+                    color: selectedPaymentIds.size === 0 ? '#aaa' : '#1D9E75',
+                    border: '1px solid ' + (selectedPaymentIds.size === 0 ? '#ddd' : '#1D9E75'),
+                    cursor: selectedPaymentIds.size === 0 ? 'not-allowed' : 'pointer', fontWeight: 500,
+                  }}
+                >
+                  🧾 선택 항목 영수증 출력 {selectedPaymentIds.size > 0 ? `(${selectedPaymentIds.size})` : ''}
+                </button>
+                <Link href="/payments" style={{ color: '#185FA5', textDecoration: 'none' }}>
+                  수납관리에서 보기 →
+                </Link>
+              </div>
             </div>
           </div>
         )}
