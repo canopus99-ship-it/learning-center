@@ -464,7 +464,6 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         const perMonthAmount = Math.floor(totalAmount / 10);
 
         for (let m = 2; m <= 12; m++) {
-          const existing = getPayment(enrollment.id, m);
           const data = {
             enrollment_id: enrollment.id,
             payment_year: selectedYear,
@@ -480,12 +479,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
             updated_at: new Date().toISOString(),
           };
 
-          let result;
-          if (existing) {
-            result = await supabase.from('payments').update(data).eq('id', existing.id);
-          } else {
-            result = await supabase.from('payments').insert([data]);
-          }
+          // insert/update 대신 upsert 사용: 화면에 아직 반영 안 된 기존 결제행과 겹쳐도
+          // (enrollment_id, payment_year, payment_month) 기준으로 안전하게 덮어씀 (중복키 오류 방지)
+          const result = await supabase
+            .from('payments')
+            .upsert(data, { onConflict: 'enrollment_id,payment_year,payment_month' });
 
           if (result.error) {
             hasError = true;
@@ -495,7 +493,6 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         successCount++;
       } else {
         // 개별 월 결제
-        const existing = getPayment(enrollment.id, item.month);
         const cellAmount = cellAmounts[`${item.courseId}-${item.month}`] ?? item.amount;
 
         const data = {
@@ -513,12 +510,9 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           updated_at: new Date().toISOString(),
         };
 
-        let result;
-        if (existing) {
-          result = await supabase.from('payments').update(data).eq('id', existing.id);
-        } else {
-          result = await supabase.from('payments').insert([data]);
-        }
+        const result = await supabase
+          .from('payments')
+          .upsert(data, { onConflict: 'enrollment_id,payment_year,payment_month' });
 
         if (result.error) {
           hasError = true;
@@ -589,12 +583,13 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       updated_at: new Date().toISOString(),
     };
 
-    let result;
-    if (existing) {
-      result = await supabase.from('payments').update(data).eq('id', existing.id);
-    } else {
-      result = await supabase.from('payments').insert([data]);
-    }
+    // insert/update 대신 upsert 사용: 화면에 아직 반영 안 된 기존 결제행과 겹쳐도
+    // (enrollment_id, payment_year, payment_month) 기준으로 안전하게 덮어씀 (중복키 오류 방지)
+    const result = existing
+      ? await supabase.from('payments').update(data).eq('id', existing.id)
+      : await supabase
+          .from('payments')
+          .upsert(data, { onConflict: 'enrollment_id,payment_year,payment_month' });
 
     if (result.error) alert('저장 실패: ' + result.error.message);
     else {
