@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { canCheckAttendance, calculateMonthlyAttendance } from '@/lib/attendance';
+import { fetchAllRows } from '@/lib/fetchAll';
 
 type Course = {
   id: number;
@@ -212,10 +213,14 @@ export default function CourseAttendanceClient({
   }
 
   async function reloadAttendance() {
-    const { data } = await supabase
-      .from('attendance')
-      .select('*, course_dates!inner(course_id)')
-      .eq('course_dates.course_id', course.id);
+    // 강좌 하나의 누적 출석이 1000행을 넘을 수 있어 끝까지 페이지로 가져옴
+    const { data } = await fetchAllRows<any>((from, to) =>
+      supabase
+        .from('attendance')
+        .select('*, course_dates!inner(course_id)')
+        .eq('course_dates.course_id', course.id)
+        .range(from, to)
+    );
     setAttendance(data || []);
   }
 

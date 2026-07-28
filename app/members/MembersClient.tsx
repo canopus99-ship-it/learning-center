@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { fetchAllRows } from '@/lib/fetchAll';
 import * as XLSX from 'xlsx';
 
 type Member = {
@@ -68,10 +69,14 @@ export default function MembersClient() {
 
   async function loadMembers() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('members')
-      .select('*')
-      .order('created_at', { ascending: false });
+    // 회원 수가 1000명을 넘으면 기본 조회로는 뒤쪽이 잘리므로 끝까지 페이지로 가져옴
+    const { data, error } = await fetchAllRows<Member>((from, to) =>
+      supabase
+        .from('members')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, to)
+    );
 
     if (error) {
       alert('회원 목록 불러오기 실패: ' + error.message);

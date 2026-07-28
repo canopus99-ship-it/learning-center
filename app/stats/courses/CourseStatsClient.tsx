@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { fetchAllRows } from '@/lib/fetchAll';
 import * as XLSX from 'xlsx';
 
 type Course = {
@@ -102,27 +103,40 @@ export default function CourseStatsClient() {
     const first = monthBounds(prevY, prevM);
     const last = monthBounds(months[months.length - 1].y, months[months.length - 1].m);
 
+    // 회원/강좌 수가 늘면 1000행을 넘을 수 있어 전부 페이지 단위로 끝까지 가져옴
     const [cRes, eRes, dRes] = await Promise.all([
       supabase.from('courses').select('id, category, name, is_active').order('category').order('name'),
       // enrollment은 enrollment_id → member_id 매핑용 (출석 분석에 필요)
-      supabase.from('enrollments').select('id, member_id, course_id, status, enrolled_at, end_date'),
+      fetchAllRows<Enrollment>((from, to) =>
+        supabase.from('enrollments').select('id, member_id, course_id, status, enrolled_at, end_date').range(from, to)
+      ),
       // 전월 포함하여 로드
-      supabase.from('course_dates').select('id, course_id, class_date, is_cancelled').gte('class_date', first.start).lte('class_date', last.end),
+      fetchAllRows<CourseDate>((from, to) =>
+        supabase
+          .from('course_dates')
+          .select('id, course_id, class_date, is_cancelled')
+          .gte('class_date', first.start)
+          .lte('class_date', last.end)
+          .range(from, to)
+      ),
     ]);
 
     const courseDateIds = (dRes.data || []).map(d => d.id);
     let attRes: { data: AttendanceRow[] | null } = { data: [] };
     if (courseDateIds.length > 0) {
-      // in 절은 chunk로 나눠야 안전 (1000개 제한)
+      // in 절 크기 제한(안전하게 500개씩) + 응답 행 수 제한(1000행) 둘 다 대응해야 함
       const allAtt: AttendanceRow[] = [];
       for (let i = 0; i < courseDateIds.length; i += 500) {
         const chunk = courseDateIds.slice(i, i + 500);
-        const r = await supabase
-          .from('attendance')
-          .select('enrollment_id, course_date_id, is_present')
-          .in('course_date_id', chunk)
-          .eq('is_present', true);
-        if (r.data) allAtt.push(...r.data);
+        const r = await fetchAllRows<AttendanceRow>((from, to) =>
+          supabase
+            .from('attendance')
+            .select('enrollment_id, course_date_id, is_present')
+            .in('course_date_id', chunk)
+            .eq('is_present', true)
+            .range(from, to)
+        );
+        allAtt.push(...r.data);
       }
       attRes.data = allAtt;
     }

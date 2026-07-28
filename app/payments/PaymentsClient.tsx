@@ -15,6 +15,7 @@ import {
   type EndReason,
 } from '@/lib/payments';
 import { STATUS_LABELS, type EnrollmentStatus } from '@/lib/enrollment';
+import { fetchAllRows } from '@/lib/fetchAll';
 import * as XLSX from 'xlsx';
 
 type Course = {
@@ -192,11 +193,18 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setLoading(true);
     const [coursesRes, enrollmentsRes, paymentsRes, levelsRes] = await Promise.all([
       supabase.from('courses').select('*').eq('is_active', true).order('category').order('name'),
-      supabase
-        .from('enrollments')
-        .select('*, members(id, name, phone, region_type, is_jung_gu, is_discount_50, is_discount_100)')
-        .in('status', ['active', 'paused', 'ended']),
-      supabase.from('payments').select('*').eq('payment_year', selectedYear),
+      // 회원/강좌 수가 늘면 1000행을 넘을 수 있어 전체를 페이지 단위로 끝까지 가져옴
+      fetchAllRows<Enrollment>((from, to) =>
+        supabase
+          .from('enrollments')
+          .select('*, members(id, name, phone, region_type, is_jung_gu, is_discount_50, is_discount_100)')
+          .in('status', ['active', 'paused', 'ended'])
+          .range(from, to)
+      ),
+      // payments는 연도별로도 1000행을 쉽게 넘을 수 있어(실제로 2026년 1482행 확인됨) 전체를 끝까지 가져옴
+      fetchAllRows<Payment>((from, to) =>
+        supabase.from('payments').select('*').eq('payment_year', selectedYear).range(from, to)
+      ),
       supabase.from('course_levels').select('*').order('course_id').order('sort_order'),
     ]);
 

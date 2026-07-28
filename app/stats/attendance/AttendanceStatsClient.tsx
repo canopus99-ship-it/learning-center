@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { fetchAllRows } from '@/lib/fetchAll';
 
 type Course = { id: number; category: string; name: string };
 type Enrollment = {
@@ -54,13 +55,37 @@ export default function AttendanceStatsClient() {
     if (start > end) { alert('시작월이 종료월보다 뒤입니다.'); return; }
     setLoading(true);
 
+    // 회원/강좌/출석 데이터가 1000행을 넘을 수 있어 전부 페이지 단위로 끝까지 가져옴
     const [coursesRes, enrollRes, membersRes, datesRes, lessonFixedRes, lessonAttRes] = await Promise.all([
       supabase.from('courses').select('id, category, name').order('category').order('name'),
-      supabase.from('enrollments').select('id, member_id, course_id, status, enrolled_at, end_date, start_year, start_month'),
-      supabase.from('members').select('id, name, is_discount_50, is_discount_100'),
-      supabase.from('course_dates').select('id, course_id, class_date, is_cancelled').gte('class_date', start).lte('class_date', end),
-      supabase.from('lesson_fixed_schedules').select('enrollment_id, course_id'),
-      supabase.from('lesson_attendance').select('course_id, enrollment_id, attend_date, is_attended').gte('attend_date', start).lte('attend_date', end),
+      fetchAllRows<Enrollment>((from, to) =>
+        supabase
+          .from('enrollments')
+          .select('id, member_id, course_id, status, enrolled_at, end_date, start_year, start_month')
+          .range(from, to)
+      ),
+      fetchAllRows<Member>((from, to) =>
+        supabase.from('members').select('id, name, is_discount_50, is_discount_100').range(from, to)
+      ),
+      fetchAllRows<CourseDate>((from, to) =>
+        supabase
+          .from('course_dates')
+          .select('id, course_id, class_date, is_cancelled')
+          .gte('class_date', start)
+          .lte('class_date', end)
+          .range(from, to)
+      ),
+      fetchAllRows<LessonFixed>((from, to) =>
+        supabase.from('lesson_fixed_schedules').select('enrollment_id, course_id').range(from, to)
+      ),
+      fetchAllRows<LessonAtt>((from, to) =>
+        supabase
+          .from('lesson_attendance')
+          .select('course_id, enrollment_id, attend_date, is_attended')
+          .gte('attend_date', start)
+          .lte('attend_date', end)
+          .range(from, to)
+      ),
     ]);
 
     const dateIds = (datesRes.data || []).map(d => d.id);
@@ -68,12 +93,16 @@ export default function AttendanceStatsClient() {
     for (let i = 0; i < dateIds.length; i += 200) {
       const chunk = dateIds.slice(i, i + 200);
       if (chunk.length === 0) break;
-      const { data } = await supabase
-        .from('attendance')
-        .select('enrollment_id, course_date_id, is_present')
-        .in('course_date_id', chunk)
-        .eq('is_present', true);
-      if (data) presentRows.push(...data);
+      // 청크 하나의 응답도 1000행을 넘을 수 있어 끝까지 가져옴
+      const { data } = await fetchAllRows<AttendanceRow>((from, to) =>
+        supabase
+          .from('attendance')
+          .select('enrollment_id, course_date_id, is_present')
+          .in('course_date_id', chunk)
+          .eq('is_present', true)
+          .range(from, to)
+      );
+      presentRows.push(...data);
     }
 
     setCourses(coursesRes.data || []);

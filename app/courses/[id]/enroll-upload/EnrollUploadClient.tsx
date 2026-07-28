@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { fetchAllRows } from '@/lib/fetchAll';
 import * as XLSX from 'xlsx';
 
 type Course = {
@@ -121,10 +122,14 @@ export default function EnrollUploadClient({ course, levels }: { course: Course;
       return;
     }
 
-    // 전체 회원 + 이 강좌의 기존 enrollment 모두 로드
+    // 전체 회원 + 이 강좌의 기존 enrollment 모두 로드 (1000행 넘으면 잘리는 것 방지)
     const [mRes, eRes] = await Promise.all([
-      supabase.from('members').select('id, name, phone'),
-      supabase.from('enrollments').select('id, member_id, status').eq('course_id', course.id),
+      fetchAllRows<{ id: number; name: string | null; phone: string | null }>((from, to) =>
+        supabase.from('members').select('id, name, phone').range(from, to)
+      ),
+      fetchAllRows<{ id: number; member_id: number; status: string }>((from, to) =>
+        supabase.from('enrollments').select('id, member_id, status').eq('course_id', course.id).range(from, to)
+      ),
     ]);
     const allMembers = mRes.data || [];
     const existingEnrollments = eRes.data || [];

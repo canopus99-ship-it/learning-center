@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { fetchAllRows } from '@/lib/fetchAll';
 import * as XLSX from 'xlsx';
 
 // 감면 매핑
@@ -156,10 +157,10 @@ export default function UploadClient() {
       return;
     }
 
-    // 기존 회원 로드 (중복 체크용)
-    const { data: existingMembers } = await supabase
-      .from('members')
-      .select('name, phone');
+    // 기존 회원 로드 (중복 체크용) - 1000명 넘으면 잘려서 중복 체크가 누락될 수 있어 끝까지 가져옴
+    const { data: existingMembers } = await fetchAllRows<{ name: string | null; phone: string | null }>(
+      (from, to) => supabase.from('members').select('name, phone').range(from, to)
+    );
     const existingSet = new Set(
       (existingMembers || []).map(m => `${(m.name || '').trim()}|${formatPhone(m.phone || '')}`)
     );

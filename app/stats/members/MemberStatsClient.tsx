@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { fetchAllRows } from '@/lib/fetchAll';
 import * as XLSX from 'xlsx';
 
 type Member = {
@@ -108,10 +109,20 @@ export default function MemberStatsClient() {
     const first = monthBounds(months[0].y, months[0].m);
     const last = monthBounds(months[months.length - 1].y, months[months.length - 1].m);
 
+    // 회원/출석 데이터가 1000행을 넘을 수 있어 전부 페이지 단위로 끝까지 가져옴
     const [mRes, eRes, dRes] = await Promise.all([
-      supabase.from('members').select('id, name, birth_date, gender, region_type, is_jung_gu, is_discount_50, is_discount_100, received_date'),
-      supabase.from('enrollments').select('id, member_id, course_id'),
-      supabase.from('course_dates').select('id, class_date').gte('class_date', first.start).lte('class_date', last.end),
+      fetchAllRows<Member>((from, to) =>
+        supabase
+          .from('members')
+          .select('id, name, birth_date, gender, region_type, is_jung_gu, is_discount_50, is_discount_100, received_date')
+          .range(from, to)
+      ),
+      fetchAllRows<Enrollment>((from, to) =>
+        supabase.from('enrollments').select('id, member_id, course_id').range(from, to)
+      ),
+      fetchAllRows<CourseDate>((from, to) =>
+        supabase.from('course_dates').select('id, class_date').gte('class_date', first.start).lte('class_date', last.end).range(from, to)
+      ),
     ]);
 
     const courseDateIds = (dRes.data || []).map(d => d.id);
@@ -119,12 +130,15 @@ export default function MemberStatsClient() {
     if (courseDateIds.length > 0) {
       for (let i = 0; i < courseDateIds.length; i += 500) {
         const chunk = courseDateIds.slice(i, i + 500);
-        const r = await supabase
-          .from('attendance')
-          .select('enrollment_id, course_date_id, is_present')
-          .in('course_date_id', chunk)
-          .eq('is_present', true);
-        if (r.data) allAtt.push(...r.data);
+        const r = await fetchAllRows<AttendanceRow>((from, to) =>
+          supabase
+            .from('attendance')
+            .select('enrollment_id, course_date_id, is_present')
+            .in('course_date_id', chunk)
+            .eq('is_present', true)
+            .range(from, to)
+        );
+        allAtt.push(...r.data);
       }
     }
 
