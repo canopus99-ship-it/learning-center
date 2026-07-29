@@ -70,13 +70,24 @@ function calcAge(birth: string | null, refDate: Date): number | null {
   return age;
 }
 
+// 연령대 구분 순서(고정) - 어르신 세대 비중이 높아 60세 이후를 세분화
+const AGE_GROUP_ORDER = [
+  '영유아(0-6세)', '초등학생(7-12세)', '청소년(13-19세)', '성인(20-59세)',
+  '장년(60-64세)', '신노년(65-69세)', '70대(70-79세)', '80대(80-89세)', '90대 이상', '미입력',
+] as const;
+
 // 나이 → 연령대
 function ageGroup(age: number | null): string {
   if (age === null) return '미입력';
-  if (age < 60) return '60대 미만';
-  if (age < 70) return '60대';
-  if (age < 80) return '70대';
-  return '80대 이상';
+  if (age <= 6) return '영유아(0-6세)';
+  if (age <= 12) return '초등학생(7-12세)';
+  if (age <= 19) return '청소년(13-19세)';
+  if (age <= 59) return '성인(20-59세)';
+  if (age <= 64) return '장년(60-64세)';
+  if (age <= 69) return '신노년(65-69세)';
+  if (age <= 79) return '70대(70-79세)';
+  if (age <= 89) return '80대(80-89세)';
+  return '90대 이상';
 }
 
 export default function MemberStatsClient() {
@@ -216,7 +227,7 @@ export default function MemberStatsClient() {
     // 성별
     const gender = { '남': 0, '여': 0, '미입력': 0 };
     // 연령대
-    const age: Record<string, number> = { '60대 미만': 0, '60대': 0, '70대': 0, '80대 이상': 0, '미입력': 0 };
+    const age: Record<string, number> = Object.fromEntries(AGE_GROUP_ORDER.map(k => [k, 0]));
     // 거주
     const region = { '중구민': 0, '타구민': 0, '미입력': 0 };
     // 감면

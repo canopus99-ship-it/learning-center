@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { fetchAllRows } from '@/lib/fetchAll';
 
-type Course = { id: number; category: string; name: string };
+type Course = { id: number; category: string; name: string; is_free: boolean };
 type Enrollment = {
   id: number; member_id: number; course_id: number; status: string;
   enrolled_at: string | null; end_date: string | null;
@@ -18,7 +18,7 @@ type LessonFixed = { enrollment_id: number; course_id: number };
 type LessonAtt = { course_id: number; enrollment_id: number; attend_date: string; is_attended: boolean };
 
 type Row = {
-  memberId: number; memberName: string; courseName: string; category: string;
+  memberId: number; memberName: string; courseId: number; courseName: string; category: string;
   discount: '무료' | '감면' | ''; attended: number; operating: number; rate: number; isLesson: boolean;
 };
 
@@ -38,6 +38,12 @@ export default function AttendanceStatsClient() {
   const [toYear, setToYear] = useState(today.getFullYear());
   const [toMonth, setToMonth] = useState(today.getMonth() + 1);
   const [discountOnly, setDiscountOnly] = useState(true);
+  const [nameQuery, setNameQuery] = useState('');
+
+  // 탭: 감면·무료 출석률(기존) / 강좌별 출석현황(무단결석 관리용, 신규)
+  const [activeTab, setActiveTab] = useState<'discount' | 'byCourse'>('discount');
+  const [courseSearchQuery, setCourseSearchQuery] = useState('');
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
 
   const [courses, setCourses] = useState<Course[]>([]);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
@@ -57,7 +63,7 @@ export default function AttendanceStatsClient() {
 
     // 회원/강좌/출석 데이터가 1000행을 넘을 수 있어 전부 페이지 단위로 끝까지 가져옴
     const [coursesRes, enrollRes, membersRes, datesRes, lessonFixedRes, lessonAttRes] = await Promise.all([
-      supabase.from('courses').select('id, category, name').order('category').order('name'),
+      supabase.from('courses').select('id, category, name, is_free').order('category').order('name'),
       fetchAllRows<Enrollment>((from, to) =>
         supabase
           .from('enrollments')
@@ -116,8 +122,8 @@ export default function AttendanceStatsClient() {
     setLoaded(true);
   }
 
-  const rows = useMemo<Row[]>(() => {
-    if (!loaded) return [];
+  const computedRows = useMemo<{ all: Row[]; filtered: Row[] }>(() => {
+    if (!loaded) return { all: [], filtered: [] };
     const periodStart = monthBounds(fromYear, fromMonth).start;
     const periodEnd = monthBounds(toYear, toMonth).end;
 
@@ -172,7 +178,7 @@ export default function AttendanceStatsClient() {
         const attended = lessonAttendedByEnroll.get(e.id) ?? 0;
         const rate = Math.round((attended / operating) * 100);
         result.push({
-          memberId: member.id, memberName: member.name, courseName: course.name,
+          memberId: member.id, memberName: member.name, courseId: course.id, courseName: course.name,
           category: course.category, discount, attended, operating, rate, isLesson: true,
         });
         return;
@@ -197,19 +203,39 @@ export default function AttendanceStatsClient() {
       const rate = Math.round((attended / operating) * 100);
 
       result.push({
-        memberId: member.id, memberName: member.name, courseName: course.name,
+        memberId: member.id, memberName: member.name, courseId: course.id, courseName: course.name,
         category: course.category, discount, attended, operating, rate, isLesson: false,
       });
     });
 
+    result.sort((a, b) => a.rate - b.rate || a.memberName.localeCompare(b.memberName));
     const filtered = discountOnly ? result.filter(r => r.discount !== '') : result;
-    filtered.sort((a, b) => a.rate - b.rate || a.memberName.localeCompare(b.memberName));
-    return filtered;
+    return { all: result, filtered };
   }, [loaded, courses, enrollments, members, courseDates, present, lessonFixed, lessonAtt, fromYear, fromMonth, toYear, toMonth, discountOnly]);
+
+  const allRows = computedRows.all;
+  const rows = useMemo(
+    () => (nameQuery.trim() ? computedRows.filtered.filter(r => r.memberName.includes(nameQuery.trim())) : computedRows.filtered),
+    [computedRows, nameQuery]
+  );
 
   useEffect(() => { loadData(); /* eslint-disable-next-line */ }, []);
 
   const lowCount = rows.filter(r => r.rate < 50).length;
+
+  // 강좌별 출석현황(무단결석 관리용) - 검색은 무료강좌만 대상
+  const freeCourses = useMemo(() => courses.filter(c => c.is_free), [courses]);
+  const matchingFreeCourses = useMemo(() => {
+    const q = courseSearchQuery.trim();
+    if (!q) return [];
+    return freeCourses.filter(c => c.name.includes(q)).slice(0, 20);
+  }, [freeCourses, courseSearchQuery]);
+  const selectedCourse = useMemo(() => courses.find(c => c.id === selectedCourseId) || null, [courses, selectedCourseId]);
+  const courseRoster = useMemo(
+    () => (selectedCourseId ? allRows.filter(r => r.courseId === selectedCourseId) : []),
+    [allRows, selectedCourseId]
+  );
+
   const years = [today.getFullYear() - 2, today.getFullYear() - 1, today.getFullYear()];
   const monthsArr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
   const selectStyle: React.CSSProperties = { padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6, fontSize: 14 };
@@ -219,84 +245,238 @@ export default function AttendanceStatsClient() {
       <Link href="/stats" style={{ color: '#666', fontSize: 13, textDecoration: 'none' }}>← 통계로</Link>
       <h1 style={{ fontSize: 22, marginTop: 12, marginBottom: 8 }}>📋 출석률 조회</h1>
 
-      <div style={{
-        padding: 12, background: '#F1F5FB', border: '1px solid #D6E2F0',
-        borderRadius: 8, fontSize: 12.5, color: '#3B5366', marginBottom: 20, lineHeight: 1.6,
-      }}>
-        감면 자격 확인용 화면입니다. <strong>출석률과 감면 여부</strong>만 표시되며, 구체적 감면 사유는 표시하지 않습니다.
-        별도 명단으로 저장하지 않고 조회할 때마다 계산합니다. (운영세칙 제12조 2항: 감면자 분기 출석률 50% 이하 시 감면 종료 검토)
-        <br />※ 레슨은 예정 회차 = 운영일수 × (주간횟수 ÷ 5)로 산출한 근사치입니다.
+      {/* 탭 */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {([
+          { key: 'discount' as const, label: '💳 감면·무료 출석률' },
+          { key: 'byCourse' as const, label: '🔍 강좌별 출석현황' },
+        ]).map(t => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key)}
+            style={{
+              padding: '8px 18px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
+              background: activeTab === t.key ? '#185FA5' : 'white',
+              color: activeTab === t.key ? 'white' : '#555',
+              border: '1px solid ' + (activeTab === t.key ? '#185FA5' : '#ddd'),
+              fontWeight: activeTab === t.key ? 600 : 400,
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        <select value={fromYear} onChange={e => setFromYear(+e.target.value)} style={selectStyle}>
-          {years.map(y => <option key={y} value={y}>{y}년</option>)}
-        </select>
-        <select value={fromMonth} onChange={e => setFromMonth(+e.target.value)} style={selectStyle}>
-          {monthsArr.map(m => <option key={m} value={m}>{m}월</option>)}
-        </select>
-        <span style={{ color: '#888' }}>~</span>
-        <select value={toYear} onChange={e => setToYear(+e.target.value)} style={selectStyle}>
-          {years.map(y => <option key={y} value={y}>{y}년</option>)}
-        </select>
-        <select value={toMonth} onChange={e => setToMonth(+e.target.value)} style={selectStyle}>
-          {monthsArr.map(m => <option key={m} value={m}>{m}월</option>)}
-        </select>
-        <button onClick={loadData} disabled={loading} style={{
-          padding: '7px 16px', background: '#185FA5', color: 'white', border: 'none',
-          borderRadius: 6, fontSize: 14, cursor: 'pointer', fontWeight: 600,
-        }}>{loading ? '조회 중…' : '조회'}</button>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, color: '#444', marginLeft: 4 }}>
-          <input type="checkbox" checked={discountOnly} onChange={e => setDiscountOnly(e.target.checked)} />
-          감면·무료만 보기
-        </label>
-      </div>
+      {activeTab === 'discount' && (
+        <>
+          <div style={{
+            padding: 12, background: '#F1F5FB', border: '1px solid #D6E2F0',
+            borderRadius: 8, fontSize: 12.5, color: '#3B5366', marginBottom: 20, lineHeight: 1.6,
+          }}>
+            감면 자격 확인용 화면입니다. <strong>출석률과 감면 여부</strong>만 표시되며, 구체적 감면 사유는 표시하지 않습니다.
+            별도 명단으로 저장하지 않고 조회할 때마다 계산합니다. (운영세칙 제12조 2항: 감면자 분기 출석률 50% 이하 시 감면 종료 검토)
+            <br />※ 레슨은 예정 회차 = 운영일수 × (주간횟수 ÷ 5)로 산출한 근사치입니다.
+          </div>
 
-      {loaded && (
-        <p style={{ fontSize: 13, color: '#666', margin: '0 0 8px' }}>
-          총 {rows.length}명 · <span style={{ color: '#A32D2D', fontWeight: 600 }}>출석률 50% 미만 {lowCount}명</span>
-        </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+            <select value={fromYear} onChange={e => setFromYear(+e.target.value)} style={selectStyle}>
+              {years.map(y => <option key={y} value={y}>{y}년</option>)}
+            </select>
+            <select value={fromMonth} onChange={e => setFromMonth(+e.target.value)} style={selectStyle}>
+              {monthsArr.map(m => <option key={m} value={m}>{m}월</option>)}
+            </select>
+            <span style={{ color: '#888' }}>~</span>
+            <select value={toYear} onChange={e => setToYear(+e.target.value)} style={selectStyle}>
+              {years.map(y => <option key={y} value={y}>{y}년</option>)}
+            </select>
+            <select value={toMonth} onChange={e => setToMonth(+e.target.value)} style={selectStyle}>
+              {monthsArr.map(m => <option key={m} value={m}>{m}월</option>)}
+            </select>
+            <button onClick={loadData} disabled={loading} style={{
+              padding: '7px 16px', background: '#185FA5', color: 'white', border: 'none',
+              borderRadius: 6, fontSize: 14, cursor: 'pointer', fontWeight: 600,
+            }}>{loading ? '조회 중…' : '조회'}</button>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, color: '#444', marginLeft: 4 }}>
+              <input type="checkbox" checked={discountOnly} onChange={e => setDiscountOnly(e.target.checked)} />
+              감면·무료만 보기
+            </label>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <input
+              value={nameQuery}
+              onChange={e => setNameQuery(e.target.value)}
+              placeholder="🔎 이름으로 찾기"
+              style={{ padding: '7px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13, width: 220 }}
+            />
+          </div>
+
+          {loaded && (
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 8px' }}>
+              총 {rows.length}명 · <span style={{ color: '#A32D2D', fontWeight: 600 }}>출석률 50% 미만 {lowCount}명</span>
+            </p>
+          )}
+
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: '2px solid #eee', background: '#fafafa', textAlign: 'left' }}>
+                <th style={th}>이름</th>
+                <th style={th}>강좌</th>
+                <th style={th}>감면</th>
+                <th style={{ ...th, textAlign: 'center' }}>출석/예정</th>
+                <th style={{ ...th, textAlign: 'right' }}>출석률</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={`${r.memberId}-${r.courseName}-${i}`} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                  <td style={td}>
+                    <Link href={`/members/${r.memberId}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{r.memberName}</Link>
+                  </td>
+                  <td style={td}>
+                    <span style={{ color: '#888', fontSize: 11 }}>{r.category} </span>{r.courseName}
+                    {r.isLesson && <span style={{ marginLeft: 6, fontSize: 10, padding: '1px 5px', borderRadius: 4, background: '#E8DEF8', color: '#5B3FA0' }}>레슨</span>}
+                  </td>
+                  <td style={td}>
+                    {r.discount && (
+                      <span style={{
+                        fontSize: 11, padding: '1px 6px', borderRadius: 4, color: 'white',
+                        background: r.discount === '무료' ? '#6B7280' : '#2D7A6B',
+                      }}>{r.discount}</span>
+                    )}
+                  </td>
+                  <td style={{ ...td, textAlign: 'center', color: '#666' }}>{r.attended} / {r.operating}</td>
+                  <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: r.rate < 50 ? '#A32D2D' : '#1D9E75' }}>
+                    {r.rate}%
+                  </td>
+                </tr>
+              ))}
+              {loaded && rows.length === 0 && (
+                <tr><td colSpan={5} style={{ ...td, textAlign: 'center', color: '#999', padding: 24 }}>조회 결과가 없습니다.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </>
       )}
 
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-        <thead>
-          <tr style={{ borderBottom: '2px solid #eee', background: '#fafafa', textAlign: 'left' }}>
-            <th style={th}>이름</th>
-            <th style={th}>강좌</th>
-            <th style={th}>감면</th>
-            <th style={{ ...th, textAlign: 'center' }}>출석/예정</th>
-            <th style={{ ...th, textAlign: 'right' }}>출석률</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={`${r.memberId}-${r.courseName}-${i}`} style={{ borderBottom: '1px solid #f0f0f0' }}>
-              <td style={td}>
-                <Link href={`/members/${r.memberId}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{r.memberName}</Link>
-              </td>
-              <td style={td}>
-                <span style={{ color: '#888', fontSize: 11 }}>{r.category} </span>{r.courseName}
-                {r.isLesson && <span style={{ marginLeft: 6, fontSize: 10, padding: '1px 5px', borderRadius: 4, background: '#E8DEF8', color: '#5B3FA0' }}>레슨</span>}
-              </td>
-              <td style={td}>
-                {r.discount && (
-                  <span style={{
-                    fontSize: 11, padding: '1px 6px', borderRadius: 4, color: 'white',
-                    background: r.discount === '무료' ? '#6B7280' : '#2D7A6B',
-                  }}>{r.discount}</span>
-                )}
-              </td>
-              <td style={{ ...td, textAlign: 'center', color: '#666' }}>{r.attended} / {r.operating}</td>
-              <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: r.rate < 50 ? '#A32D2D' : '#1D9E75' }}>
-                {r.rate}%
-              </td>
-            </tr>
-          ))}
-          {loaded && rows.length === 0 && (
-            <tr><td colSpan={5} style={{ ...td, textAlign: 'center', color: '#999', padding: 24 }}>조회 결과가 없습니다.</td></tr>
+      {activeTab === 'byCourse' && (
+        <>
+          <div style={{
+            padding: 12, background: '#F1F5FB', border: '1px solid #D6E2F0',
+            borderRadius: 8, fontSize: 12.5, color: '#3B5366', marginBottom: 20, lineHeight: 1.6,
+          }}>
+            무료강좌 무단결석 관리용 화면입니다. 강좌를 검색해서 선택하면, 그 강좌 수강생 전체의 출석 현황을 출석률이 낮은 순으로 보여줍니다.
+            (아직 결석 기준 비율이 규정으로 정해지지 않아 별도 색 강조 없이 숫자만 정렬해서 보여드려요.)
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+            <select value={fromYear} onChange={e => setFromYear(+e.target.value)} style={selectStyle}>
+              {years.map(y => <option key={y} value={y}>{y}년</option>)}
+            </select>
+            <select value={fromMonth} onChange={e => setFromMonth(+e.target.value)} style={selectStyle}>
+              {monthsArr.map(m => <option key={m} value={m}>{m}월</option>)}
+            </select>
+            <span style={{ color: '#888' }}>~</span>
+            <select value={toYear} onChange={e => setToYear(+e.target.value)} style={selectStyle}>
+              {years.map(y => <option key={y} value={y}>{y}년</option>)}
+            </select>
+            <select value={toMonth} onChange={e => setToMonth(+e.target.value)} style={selectStyle}>
+              {monthsArr.map(m => <option key={m} value={m}>{m}월</option>)}
+            </select>
+            <button onClick={loadData} disabled={loading} style={{
+              padding: '7px 16px', background: '#185FA5', color: 'white', border: 'none',
+              borderRadius: 6, fontSize: 14, cursor: 'pointer', fontWeight: 600,
+            }}>{loading ? '조회 중…' : '조회'}</button>
+          </div>
+
+          {!selectedCourse ? (
+            <div style={{ position: 'relative', marginBottom: 16 }}>
+              <input
+                value={courseSearchQuery}
+                onChange={e => setCourseSearchQuery(e.target.value)}
+                placeholder="🔎 무료강좌 이름으로 검색"
+                style={{ padding: '9px 12px', border: '1px solid #ddd', borderRadius: 6, fontSize: 14, width: 320 }}
+              />
+              {courseSearchQuery.trim() && (
+                <div style={{
+                  marginTop: 4, border: '1px solid #ddd', borderRadius: 6, background: 'white',
+                  maxWidth: 320, boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                }}>
+                  {matchingFreeCourses.length === 0 ? (
+                    <div style={{ padding: 12, fontSize: 13, color: '#999' }}>일치하는 무료강좌가 없습니다.</div>
+                  ) : (
+                    matchingFreeCourses.map(c => (
+                      <div
+                        key={c.id}
+                        onClick={() => { setSelectedCourseId(c.id); setCourseSearchQuery(''); }}
+                        style={{ padding: '9px 12px', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid #f0f0f0' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#f7f9fc')}
+                        onMouseLeave={e => (e.currentTarget.style.background = 'white')}
+                      >
+                        <span style={{ color: '#888', fontSize: 11 }}>{c.category} </span>{c.name}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+              {freeCourses.length === 0 && loaded && (
+                <p style={{ fontSize: 12, color: '#999', marginTop: 8 }}>등록된 무료강좌가 없습니다.</p>
+              )}
+            </div>
+          ) : (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <strong style={{ fontSize: 15 }}>
+                  <span style={{ color: '#888', fontSize: 12, marginRight: 4 }}>{selectedCourse.category}</span>
+                  {selectedCourse.name}
+                </strong>
+                <button
+                  onClick={() => { setSelectedCourseId(null); setCourseSearchQuery(''); }}
+                  style={{ padding: '4px 10px', fontSize: 12, borderRadius: 6, border: '1px solid #ddd', background: 'white', cursor: 'pointer', color: '#555' }}
+                >
+                  다른 강좌 검색
+                </button>
+              </div>
+              <p style={{ fontSize: 13, color: '#666', margin: '0 0 8px' }}>
+                총 {courseRoster.length}명 (출석률 낮은 순)
+              </p>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid #eee', background: '#fafafa', textAlign: 'left' }}>
+                    <th style={th}>이름</th>
+                    <th style={th}>감면</th>
+                    <th style={{ ...th, textAlign: 'center' }}>출석/예정</th>
+                    <th style={{ ...th, textAlign: 'right' }}>출석률</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {courseRoster.map((r, i) => (
+                    <tr key={`${r.memberId}-${i}`} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                      <td style={td}>
+                        <Link href={`/members/${r.memberId}`} style={{ color: '#185FA5', textDecoration: 'none' }}>{r.memberName}</Link>
+                        {r.isLesson && <span style={{ marginLeft: 6, fontSize: 10, padding: '1px 5px', borderRadius: 4, background: '#E8DEF8', color: '#5B3FA0' }}>레슨</span>}
+                      </td>
+                      <td style={td}>
+                        {r.discount && (
+                          <span style={{
+                            fontSize: 11, padding: '1px 6px', borderRadius: 4, color: 'white',
+                            background: r.discount === '무료' ? '#6B7280' : '#2D7A6B',
+                          }}>{r.discount}</span>
+                        )}
+                      </td>
+                      <td style={{ ...td, textAlign: 'center', color: '#666' }}>{r.attended} / {r.operating}</td>
+                      <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: '#333' }}>{r.rate}%</td>
+                    </tr>
+                  ))}
+                  {courseRoster.length === 0 && (
+                    <tr><td colSpan={4} style={{ ...td, textAlign: 'center', color: '#999', padding: 24 }}>해당 기간에 이 강좌 수강 이력이 없습니다.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
-        </tbody>
-      </table>
+        </>
+      )}
     </div>
   );
 }
