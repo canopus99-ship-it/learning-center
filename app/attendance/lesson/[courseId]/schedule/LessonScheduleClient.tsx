@@ -343,11 +343,17 @@ export default function LessonScheduleClient({
   }
 
   // 고정 스케줄 영구 삭제
+  // 연관 데이터 순서대로 삭제 (출석 기록 → 이번 주 변경분 → 고정 스케줄)
+  // lesson_attendance가 fixed_schedule_id를 FK로 참조하므로, 출석 기록이 이미 있는 상태에서
+  // lesson_fixed_schedules만 먼저 지우면 FK 위반으로 삭제가 실패한다.
   async function handleDeleteFixed() {
     if (!selectedFixed) return;
-    if (!confirm(`${memberNameMap.get(selectedFixed.member_id)}님의 고정 스케줄을 완전히 삭제하시겠습니까?\n(이후 모든 주에서 사라집니다)`)) return;
+    if (!confirm(`${memberNameMap.get(selectedFixed.member_id)}님의 고정 스케줄을 완전히 삭제하시겠습니까?\n\n이 스케줄로 기록된 출석 내역도 함께 삭제됩니다.\n(이후 모든 주에서 사라집니다)`)) return;
     setSaving(true);
-    await supabase.from('lesson_schedules').delete().eq('fixed_schedule_id', selectedFixed.id);
+    const { error: attErr } = await supabase.from('lesson_attendance').delete().eq('fixed_schedule_id', selectedFixed.id);
+    if (attErr) { setSaving(false); alert('출석 기록 삭제 실패: ' + attErr.message); return; }
+    const { error: schedErr } = await supabase.from('lesson_schedules').delete().eq('fixed_schedule_id', selectedFixed.id);
+    if (schedErr) { setSaving(false); alert('주간 변경 기록 삭제 실패: ' + schedErr.message); return; }
     const { error } = await supabase.from('lesson_fixed_schedules').delete().eq('id', selectedFixed.id);
     setSaving(false);
     if (error) { alert('삭제 실패: ' + error.message); return; }
