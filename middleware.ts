@@ -46,5 +46,9 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  // manifest.webmanifest·sw.js·icons/*는 태블릿 홈 화면 설치(PWA)에 쓰이는 공개 정적 파일이라
+  // 로그인 여부와 상관없이 항상 그대로 응답해야 함. 이 목록에서 빠져 있으면 로그인 페이지로
+  // 리다이렉트되어 버려서(= HTML 응답), 크롬이 유효한 매니페스트로 인식하지 못하고
+  // "앱으로 설치" 대신 그냥 브라우저 탭으로 여는 바로가기만 만들어준다.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|icons/).*)'],
 };
