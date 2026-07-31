@@ -42,6 +42,27 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // 태블릿(tablet) 권한 계정은 출석부만 접근 가능 (권한 구분표 참고).
+  // 기존에는 각 페이지(회원 관리 등)마다 role 체크가 없어서, 태블릿 계정이 주소를 직접 입력하거나
+  // (특히) 홈 화면에 설치된 앱 아이콘으로 /members에 바로 들어가면 접근 제한 없이 그대로 보였음.
+  // 페이지마다 따로 막는 대신 여기서 한 번에 걸러서 어떤 경로로 들어와도 동일하게 적용되게 함.
+  if (user && !isPublicPath) {
+    const isAttendancePath = path === '/' || path.startsWith('/attendance');
+    if (!isAttendancePath) {
+      const { data: staffRow } = await supabase
+        .from('staff_members')
+        .select('role')
+        .eq('email', (user.email || '').toLowerCase())
+        .maybeSingle();
+
+      if (staffRow?.role === 'tablet') {
+        const url = request.nextUrl.clone();
+        url.pathname = '/attendance';
+        return NextResponse.redirect(url);
+      }
+    }
+  }
+
   return response;
 }
 
