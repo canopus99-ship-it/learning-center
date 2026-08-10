@@ -44,7 +44,18 @@ function addDays(d: Date, n: number): Date {
   const r = new Date(d); r.setDate(r.getDate() + n); return r;
 }
 
-function trimTime(t: string): string { return t ? t.substring(0, 5) : ''; }
+// 12시간제 표시 (예: "14:30" → "오후 2시 30분"). 이 스케줄표는 레슨실에 붙여 강사·수강생이
+// 보는 인쇄물이라 직원용 24시간제 화면과 달리 12시간제로 표시함.
+function formatTime12(t: string): string {
+  if (!t) return '';
+  const [hStr, mStr] = t.split(':');
+  const h = parseInt(hStr, 10);
+  const m = parseInt(mStr || '0', 10);
+  if (isNaN(h)) return '';
+  const period = h < 12 ? '오전' : '오후';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return m === 0 ? `${period} ${h12}시` : `${period} ${h12}시 ${m}분`;
+}
 
 // 해당 월의 월요일 목록
 function getMondaysOfMonth(year: number, month: number): Date[] {
@@ -395,7 +406,7 @@ export default function LessonPrintClient({
                             <>
                               <div style={{ fontWeight: 600, fontSize: 12 }}>{memberNameMap.get(f.member_id) || ''}</div>
                               <div style={{ fontSize: 10, color: '#444', marginTop: 2 }}>
-                                {trimTime(f.start_time)} · {f.duration_minutes}분
+                                {formatTime12(f.start_time)} · {f.duration_minutes}분
                               </div>
                             </>
                           ) : null}
