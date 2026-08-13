@@ -100,6 +100,26 @@ export default async function LessonAttendancePage({ params }: { params: { cours
               </span>
             </div>
           </Link>
+
+          <Link href={`/attendance/lesson/${course.id}/students`} style={{ textDecoration: 'none', color: 'inherit' }}>
+            <div style={{
+              background: '#FFF5F0', border: '2px solid #FFC9A8',
+              borderRadius: 12, padding: 24, textAlign: 'center', cursor: 'pointer',
+            }}>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>👤</div>
+              <h3 style={{ fontSize: 15, margin: '0 0 4px' }}>수강생별 출석현황</h3>
+              <p style={{ fontSize: 12, color: '#888', margin: '0 0 12px' }}>
+                개인별 예정·출석·출석률 확인 (강사님 확인용)
+              </p>
+              <span style={{
+                display: 'inline-block', padding: '6px 12px',
+                background: '#C1541B', color: 'white', borderRadius: 6,
+                fontSize: 12, fontWeight: 500,
+              }}>
+                확인하기 →
+              </span>
+            </div>
+          </Link>
         </div>
 
         <div style={{
