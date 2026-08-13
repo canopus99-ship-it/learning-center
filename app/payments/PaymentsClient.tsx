@@ -1175,11 +1175,34 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   return (
     <div style={{ maxWidth: 1400, margin: '40px auto', padding: 20 }}>
       <Link href="/" style={{ color: '#666', fontSize: 13, textDecoration: 'none' }}>← 홈으로</Link>
-      <h1 style={{ fontSize: 22, marginTop: 12, marginBottom: 20 }}>💰 수납 관리</h1>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <h1 style={{ fontSize: 22, marginTop: 12, marginBottom: 20 }}>💰 수납 관리</h1>
+        <Link
+          href="/payments/daily-report"
+          target="_blank"
+          style={{
+            fontSize: 13, color: '#185FA5', textDecoration: 'none',
+            border: '1px solid #185FA5', borderRadius: 6, padding: '6px 12px',
+          }}
+        >
+          📅 일별 결제현황 출력
+        </Link>
+      </div>
 
       {/* 탭 */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '2px solid #eee' }}>
-        <TabButton active={activeTab === 'by-member'} onClick={() => setActiveTab('by-member')} label="👤 수납관리" />
+        <TabButton
+          active={activeTab === 'by-member'}
+          onClick={() => {
+            // 이미 선택된 회원이 있는 상태에서 다시 눌러도 항상 회원 검색 화면으로 돌아가게 함
+            // (회원 상세 화면까지 갔다가 홈을 거쳐 재진입하지 않아도 되도록)
+            setActiveTab('by-member');
+            setSelectedMember(null);
+            setSelectedCells(new Set());
+            setSelectedAnnualCourses(new Set());
+          }}
+          label="👤 수납관리"
+        />
         <TabButton active={activeTab === 'by-course'} onClick={() => setActiveTab('by-course')} label="🎯 강좌별 보기" />
         <TabButton active={activeTab === 'unpaid'} onClick={() => setActiveTab('unpaid')} label={`⚠️ 미납자 점검${unpaidOnlyCount > 0 ? ` (${unpaidOnlyCount})` : ''}`} />
       </div>

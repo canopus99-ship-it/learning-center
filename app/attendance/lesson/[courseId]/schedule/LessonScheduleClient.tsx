@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { formatTime12, hourLabel12 } from '@/lib/time';
 
 type Course = {
   id: number;
@@ -416,7 +417,7 @@ export default function LessonScheduleClient({
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 600, tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: 52 }} />
+              <col style={{ width: 44 }} />
               {DAYS.map((_, i) => <col key={i} />)}
             </colgroup>
             <thead>
@@ -459,9 +460,10 @@ export default function LessonScheduleClient({
                     return sh === hour;
                   });
 
+                const hl = hourLabel12(hour);
                 return (
                   <tr key={hour}>
-                    <td style={tdTimeStyle}>{hour}:00</td>
+                    <td style={{ ...tdTimeStyle, whiteSpace: 'normal', lineHeight: 1.3 }}>{hl.period}<br />{hl.text}</td>
                     {DAYS.map((_, di) => {
                       const slots = slotsInHour(di);
                       return (
@@ -491,7 +493,7 @@ export default function LessonScheduleClient({
                               >
                                 <div style={{ fontWeight: 600, fontSize: 12 }}>{name}</div>
                                 <div style={{ fontSize: 10, opacity: 0.85 }}>
-                                  {s.displayTime} · {s.displayDur}분
+                                  {formatTime12(s.displayTime)} · {s.displayDur}분
                                   {isOverride && <span style={{ marginLeft: 3, fontSize: 9, background: '#e8a800', color: 'white', borderRadius: 3, padding: '0 3px' }}>변경</span>}
                                   {isCancelled && <span style={{ marginLeft: 3, fontSize: 9 }}>취소</span>}
                                 </div>
@@ -526,7 +528,7 @@ export default function LessonScheduleClient({
             {/* 신규 추가 */}
             {modal === 'add' && (
               <>
-                <h3 style={modalTitle}>{DAYS[modalDay]}요일 {modalHour}시대 · 고정 등록</h3>
+                <h3 style={modalTitle}>{DAYS[modalDay]}요일 {hourLabel12(modalHour).period} {hourLabel12(modalHour).text}대 · 고정 등록</h3>
                 <p style={{ fontSize: 12, color: '#888', margin: '0 0 14px' }}>
                   이번 주({fmtWeekLabel(weekStart)})부터 매주 자동 표시됩니다.
                 </p>
@@ -542,7 +544,7 @@ export default function LessonScheduleClient({
                 </select>
                 <label style={labelStyle}>시작 시간</label>
                 <select value={formTime} onChange={e => setFormTime(e.target.value)} style={inputStyle}>
-                  {TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+                  {TIME_OPTIONS.map(t => <option key={t} value={t}>{formatTime12(t)}</option>)}
                 </select>
                 <label style={labelStyle}>레슨 시간</label>
                 <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -572,11 +574,11 @@ export default function LessonScheduleClient({
               <>
                 <h3 style={modalTitle}>{memberNameMap.get(selectedFixed.member_id) || '회원'}</h3>
                 <p style={{ fontSize: 12, color: '#666', margin: '0 0 4px' }}>
-                  고정: {DAYS[selectedFixed.day_of_week]}요일 {trimTime(selectedFixed.start_time)} · {selectedFixed.duration_minutes}분
+                  고정: {DAYS[selectedFixed.day_of_week]}요일 {formatTime12(selectedFixed.start_time)} · {selectedFixed.duration_minutes}분
                 </p>
                 {selectedOverride && !selectedOverride.is_cancelled && (
                   <p style={{ fontSize: 12, color: '#B8860B', margin: '0 0 14px', background: '#FFFBEA', borderRadius: 6, padding: '4px 8px' }}>
-                    이번 주 변경됨: {trimTime(selectedOverride.start_time)} · {selectedOverride.duration_minutes}분
+                    이번 주 변경됨: {formatTime12(selectedOverride.start_time)} · {selectedOverride.duration_minutes}분
                   </p>
                 )}
                 {selectedOverride?.is_cancelled && (
@@ -590,7 +592,7 @@ export default function LessonScheduleClient({
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#444', marginBottom: 8 }}>이번 주만 변경</div>
                   <label style={{ ...labelStyle, fontSize: 11 }}>시작 시간</label>
                   <select value={formTime} onChange={e => setFormTime(e.target.value)} style={{ ...inputStyle, marginBottom: 8 }}>
-                    {TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+                    {TIME_OPTIONS.map(t => <option key={t} value={t}>{formatTime12(t)}</option>)}
                   </select>
                   <label style={{ ...labelStyle, fontSize: 11 }}>레슨 시간</label>
                   <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>

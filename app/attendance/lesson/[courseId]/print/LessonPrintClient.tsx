@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { formatTime12 } from '@/lib/time';
 
 type Course = { id: number; name: string };
 type Enrollment = {
@@ -28,43 +29,18 @@ type AttendanceRecord = {
 
 const DAYS = ['월', '화', '수', '목', '금'];
 
-function getMonday(date: Date): Date {
-  const d = new Date(date);
-  const day = d.getDay();
-  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
 function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function addDays(d: Date, n: number): Date {
-  const r = new Date(d); r.setDate(r.getDate() + n); return r;
-}
-
-// 12시간제 표시 (예: "14:30" → "오후 2시 30분"). 이 스케줄표는 레슨실에 붙여 강사·수강생이
-// 보는 인쇄물이라 직원용 24시간제 화면과 달리 12시간제로 표시함.
-function formatTime12(t: string): string {
-  if (!t) return '';
-  const [hStr, mStr] = t.split(':');
-  const h = parseInt(hStr, 10);
-  const m = parseInt(mStr || '0', 10);
-  if (isNaN(h)) return '';
-  const period = h < 12 ? '오전' : '오후';
-  const h12 = h % 12 === 0 ? 12 : h % 12;
-  return m === 0 ? `${period} ${h12}시` : `${period} ${h12}시 ${m}분`;
-}
-
-// 해당 월의 월요일 목록
-function getMondaysOfMonth(year: number, month: number): Date[] {
+// 해당 월의 평일(월~금) 날짜 전체 목록 (다른 강좌 출석부와 동일하게 실제 날짜 기준으로 컬럼을 만듦)
+function getWeekdaysOfMonth(year: number, month: number): Date[] {
   const result: Date[] = [];
-  const d = new Date(year, month - 1, 1);
-  while (d.getDay() !== 1) d.setDate(d.getDate() + 1);
-  while (d.getMonth() === month - 1) {
-    result.push(new Date(d));
-    d.setDate(d.getDate() + 7);
+  const lastDay = new Date(year, month, 0).getDate();
+  for (let day = 1; day <= lastDay; day++) {
+    const d = new Date(year, month - 1, day);
+    const dow = d.getDay();
+    if (dow >= 1 && dow <= 5) result.push(d);
   }
   return result;
 }
@@ -116,42 +92,23 @@ export default function LessonPrintClient({
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const mondays = getMondaysOfMonth(selectedYear, selectedMonth);
+  // 다른 강좌 출석부와 동일하게, 컬럼은 "주" 단위가 아니라 그 달의 평일(월~금) 실제 날짜 단위.
+  // 레슨은 매일 열리고 수강생마다 다니는 요일(주 2~3회 등)이 다르기 때문에, 주 단위로 뭉치면
+  // 어느 요일에 왔는지 정보가 사라짐 — 날짜별 컬럼으로 바꿔서 그 정보를 그대로 보여줌.
+  const monthWeekdays = getWeekdaysOfMonth(selectedYear, selectedMonth);
 
-  // 수강생별 레슨 횟수 계산 (주간 스케줄 기준)
-  // 각 수강생이 해당 월에 레슨이 있는 주차 목록
-  function getLessonWeeksForMember(memberId: number): Date[] {
-    const memberSchedules = fixedSchedules.filter(f => f.member_id === memberId);
-    const weeks: Date[] = [];
-    mondays.forEach(mon => {
-      const weekStart = ymd(mon);
-      const hasLesson = memberSchedules.some(f => f.effective_from <= weekStart);
-      if (hasLesson) weeks.push(mon);
-    });
-    return weeks;
-  }
-
-  // 출석 여부: fixedScheduleId + 해당 주 날짜 범위 내 attend_date 있으면 출석
-  function getAttendanceMark(memberId: number, monday: Date): string {
-    const memberSchedules = fixedSchedules.filter(f => f.member_id === memberId);
-    const weekStart = ymd(monday);
-    const weekEnd = ymd(addDays(monday, 6));
-    for (const f of memberSchedules) {
-      if (f.effective_from > weekStart) continue;
-      const found = attendance.find(a =>
-        a.fixed_schedule_id === f.id &&
-        a.attend_date >= weekStart &&
-        a.attend_date <= weekEnd &&
-        a.is_attended
-      );
-      if (found) return '○';
-    }
-    return '';
-  }
-
-  // 주차 라벨
-  function weekLabel(monday: Date, idx: number): string {
-    return `${idx + 1}주\n${monday.getMonth() + 1}/${monday.getDate()}`;
+  // 출석 여부: 이 회원의 (이 강좌) 고정 스케줄 중 하나라도 해당 날짜에 출석 기록이 있으면 출석.
+  // (이번 주만 요일이 바뀐 경우도 실제 출석 체크는 그 바뀐 날짜로 기록되므로 day_of_week를
+  // 다시 따질 필요 없이 attend_date 일치 여부만 보면 됨)
+  function getAttendanceMark(memberId: number, dateStr: string): string {
+    const memberFixedIds = fixedSchedules.filter(f => f.member_id === memberId).map(f => f.id);
+    if (memberFixedIds.length === 0) return '';
+    const found = attendance.some(a =>
+      memberFixedIds.includes(a.fixed_schedule_id) &&
+      a.attend_date === dateStr &&
+      a.is_attended
+    );
+    return found ? '○' : '';
   }
 
   // 출석부 데이터 준비
@@ -159,10 +116,10 @@ export default function LessonPrintClient({
     .sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || '', 'ko'));
 
   const studentsPerPage = 15;
-  const weeksPerPage = 10;
+  const datesPerPage = 10;
   const studentPages = Math.max(1, Math.ceil(sortedEnrollments.length / studentsPerPage));
-  const weekPages = Math.max(1, Math.ceil(mondays.length / weeksPerPage));
-  const totalPages = studentPages * weekPages;
+  const datePages = Math.max(1, Math.ceil(monthWeekdays.length / datesPerPage));
+  const totalPages = studentPages * datePages;
 
   // 주간 스케줄표 데이터: 요일×시간 정렬
   const scheduleByDay: Record<number, FixedSchedule[]> = { 0: [], 1: [], 2: [], 3: [], 4: [] };
@@ -251,7 +208,7 @@ export default function LessonPrintClient({
 
         <div style={{ fontSize: 12, color: '#888', marginBottom: 20 }}>
           {printMode === 'attendance'
-            ? `총 ${totalPages}페이지 · 수강생 ${sortedEnrollments.length}명 · ${mondays.length}주`
+            ? `총 ${totalPages}페이지 · 수강생 ${sortedEnrollments.length}명 · ${monthWeekdays.length}일`
             : `A4 1페이지 · 요일별 레슨 시간표`}
         </div>
       </div>
@@ -260,21 +217,21 @@ export default function LessonPrintClient({
       {printMode === 'attendance' && (
         <div className="print-only" style={{ display: 'none' }}>
           {loading ? null : (
-            Array.from({ length: weekPages }).flatMap((_, wIdx) =>
+            Array.from({ length: datePages }).flatMap((_, dpIdx) =>
               Array.from({ length: studentPages }).map((_, sIdx) => {
-                const weekSlice = mondays.slice(wIdx * weeksPerPage, (wIdx + 1) * weeksPerPage);
+                const dateSlice = monthWeekdays.slice(dpIdx * datesPerPage, (dpIdx + 1) * datesPerPage);
                 const studentSlice = sortedEnrollments.slice(sIdx * studentsPerPage, (sIdx + 1) * studentsPerPage);
-                const pageNum = wIdx * studentPages + sIdx + 1;
+                const pageNum = dpIdx * studentPages + sIdx + 1;
 
                 // 10칸 맞추기
-                const weekCols = [...weekSlice];
-                while (weekCols.length < 10) weekCols.push(null as any);
+                const dateCols = [...dateSlice];
+                while (dateCols.length < 10) dateCols.push(null as any);
                 // 15명 맞추기
                 const studentRows = [...studentSlice];
                 while (studentRows.length < 15) studentRows.push(null as any);
 
                 return (
-                  <div key={`${wIdx}-${sIdx}`} className="print-page" style={{
+                  <div key={`${dpIdx}-${sIdx}`} className="print-page" style={{
                     pageBreakAfter: 'always', padding: '8px 24px',
                     fontFamily: 'sans-serif', color: '#000', background: 'white',
                   }}>
@@ -320,11 +277,11 @@ export default function LessonPrintClient({
                         <tr>
                           <th style={{ border: '1px solid black', padding: 4, width: 40, background: '#e0e0e0' }}>연번</th>
                           <th style={{ border: '1px solid black', padding: 4, width: 90, background: '#e0e0e0' }}>성명</th>
-                          {weekCols.map((mon, idx) => (
+                          {dateCols.map((d, idx) => (
                             <th key={idx} style={{ border: '1px solid black', padding: 4, background: '#e0e0e0', minWidth: 40, textAlign: 'center' }}>
-                              {idx + wIdx * weeksPerPage + 1}주
+                              {idx + dpIdx * datesPerPage + 1}
                               <div style={{ fontSize: 9, marginTop: 2 }}>
-                                {mon ? `${mon.getMonth() + 1}/${mon.getDate()}` : '/'}
+                                {d ? `${d.getMonth() + 1}/${d.getDate()}` : '/'}
                               </div>
                             </th>
                           ))}
@@ -335,19 +292,19 @@ export default function LessonPrintClient({
                           <tr key={rIdx}>
                             <td style={{ border: '1px solid black', padding: 4, textAlign: 'center', height: 24 }}>{rIdx + sIdx * studentsPerPage + 1}</td>
                             <td style={{ border: '1px solid black', padding: 4 }}>{e?.members?.name || ''}</td>
-                            {weekCols.map((mon, cIdx) => (
+                            {dateCols.map((d, cIdx) => (
                               <td key={cIdx} style={{ border: '1px solid black', padding: 4, textAlign: 'center' }}>
-                                {e && mon ? getAttendanceMark(e.member_id, mon) : ''}
+                                {e && d ? getAttendanceMark(e.member_id, ymd(d)) : ''}
                               </td>
                             ))}
                           </tr>
                         ))}
-                        {/* 주계 */}
+                        {/* 일계 */}
                         <tr>
-                          <td colSpan={2} style={{ border: '1px solid black', padding: 4, textAlign: 'center', background: '#e0e0e0', fontWeight: 'bold' }}>주계</td>
-                          {weekCols.map((mon, cIdx) => {
-                            const count = mon
-                              ? studentSlice.filter(e => getAttendanceMark(e.member_id, mon) === '○').length
+                          <td colSpan={2} style={{ border: '1px solid black', padding: 4, textAlign: 'center', background: '#e0e0e0', fontWeight: 'bold' }}>일계</td>
+                          {dateCols.map((d, cIdx) => {
+                            const count = d
+                              ? studentSlice.filter(e => getAttendanceMark(e.member_id, ymd(d)) === '○').length
                               : '';
                             return (
                               <td key={cIdx} style={{ border: '1px solid black', padding: 4, textAlign: 'center', background: '#f8f8f8' }}>
