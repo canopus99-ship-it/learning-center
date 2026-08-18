@@ -19,11 +19,34 @@ type FixedSchedule = {
 };
 type AttendanceRecord = { fixed_schedule_id: number; attend_date: string; is_attended: boolean };
 
-const DAYS = ['월', '화', '수', '목', '금'];
+const DAY_LABELS = ['월', '화', '수', '목', '금'];
 
 function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
+function getMonday(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function fmtWeekLabel(monday: Date): string {
+  const friday = addDays(monday, 4);
+  return `${monday.getMonth() + 1}/${monday.getDate()} ~ ${friday.getMonth() + 1}/${friday.getDate()}`;
+}
+
+// 두 날짜(YYYY-MM-DD) 중 더 이른/늦은 값 (문자열 비교로 충분)
+function minStr(a: string, b: string): string { return a < b ? a : b; }
+function maxStr(a: string, b: string): string { return a > b ? a : b; }
 
 // 해당 월의 평일(월~금) 날짜 목록
 function getWeekdaysOfMonth(year: number, month: number): Date[] {
@@ -40,11 +63,10 @@ function getWeekdaysOfMonth(year: number, month: number): Date[] {
 type StudentRow = {
   memberId: number;
   memberName: string;
-  discount: '무료' | '감면' | '';
+  colorTag: 'free' | 'discount' | null; // 무료/감면 여부 - 화면에는 색으로만 표시 (개인정보 보호)
   scheduleLabel: string;
-  scheduled: number;
-  attended: number;
-  rate: number;
+  weekMarks: string[]; // 이번 주 월~금 각각 출석이면 '○', 아니면 ''
+  rate: number; // 이번 주가 속한 달 기준 출석률
 };
 
 export default function StudentsClient({
@@ -57,48 +79,73 @@ export default function StudentsClient({
   const supabase = createClient();
   const today = new Date();
 
-  const [selectedYear, setSelectedYear] = useState(today.getFullYear());
-  const [selectedMonth, setSelectedMonth] = useState(today.getMonth() + 1);
+  const [weekStart, setWeekStart] = useState<Date>(() => getMonday(today));
   const [fixedSchedules, setFixedSchedules] = useState<FixedSchedule[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const weekDates = [0, 1, 2, 3, 4].map(i => addDays(weekStart, i));
+
+  // 출석률은 "이번 주가 속한 달" 기준으로 계산 (달이 걸쳐 있으면 월요일 기준 달)
+  const rateYear = weekStart.getFullYear();
+  const rateMonth = weekStart.getMonth() + 1;
+
   const loadData = useCallback(async () => {
     setLoading(true);
-    const monthStart = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
-    const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
-    const monthEnd = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const monthStart = `${rateYear}-${String(rateMonth).padStart(2, '0')}-01`;
+    const lastDay = new Date(rateYear, rateMonth, 0).getDate();
+    const monthEnd = `${rateYear}-${String(rateMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    // 표시할 주(월~금)가 그 달의 범위를 벗어날 수도 있으니(달 경계에 걸친 주),
+    // 조회 범위는 "그 달"과 "이번 주" 중 더 넓은 쪽으로 합쳐서 둘 다 놓치지 않게 함
+    const rangeStart = minStr(monthStart, ymd(weekDates[0]));
+    const rangeEnd = maxStr(monthEnd, ymd(weekDates[4]));
 
     const [{ data: fixed }, { data: att }] = await Promise.all([
       supabase
         .from('lesson_fixed_schedules')
         .select('*')
         .eq('course_id', course.id)
-        .lte('effective_from', monthEnd),
+        .lte('effective_from', rangeEnd),
       supabase
         .from('lesson_attendance')
         .select('fixed_schedule_id, attend_date, is_attended')
         .eq('course_id', course.id)
-        .gte('attend_date', monthStart)
-        .lte('attend_date', monthEnd),
+        .gte('attend_date', rangeStart)
+        .lte('attend_date', rangeEnd),
     ]);
 
     setFixedSchedules(fixed || []);
     setAttendance(att || []);
     setLoading(false);
-  }, [course.id, selectedYear, selectedMonth]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [course.id, ymd(weekStart)]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const monthWeekdays = getWeekdaysOfMonth(selectedYear, selectedMonth);
+  function prevWeek() { setWeekStart(prev => addDays(prev, -7)); }
+  function nextWeek() { setWeekStart(prev => addDays(prev, 7)); }
+  function thisWeek() { setWeekStart(getMonday(today)); }
+  const isThisWeek = ymd(weekStart) === ymd(getMonday(today));
+
+  const monthWeekdays = getWeekdaysOfMonth(rateYear, rateMonth);
 
   const rows: StudentRow[] = enrollments
     .filter(e => e.members)
     .map(e => {
       const member = e.members as Member;
       const memberFixed = fixedSchedules.filter(f => f.member_id === member.id);
+      const fixedIds = memberFixed.map(f => f.id);
 
-      // 예정 회차: 이 회원의 고정 요일에 해당하는 그 달의 평일 수
+      // 이번 주 월~금 출석 마크
+      const weekMarks = weekDates.map(d => {
+        const dateStr = ymd(d);
+        const found = attendance.some(a => fixedIds.includes(a.fixed_schedule_id) && a.attend_date === dateStr && a.is_attended);
+        return found ? '○' : '';
+      });
+
+      // 이번 주가 속한 달 기준 출석률
       const scheduledDates = new Set<string>();
       monthWeekdays.forEach(d => {
         const scheduleDow = d.getDay() - 1; // 0=월~4=금
@@ -106,36 +153,33 @@ export default function StudentsClient({
         const applicable = memberFixed.some(f => f.day_of_week === scheduleDow && f.effective_from <= dateStr);
         if (applicable) scheduledDates.add(dateStr);
       });
-
-      // 출석 회차: 이 회원의 고정 스케줄로 기록된 출석(이번 주만 요일이 바뀐 경우도 실제 기록된 날짜로 잡힘)
-      const fixedIds = memberFixed.map(f => f.id);
       const attendedDates = new Set<string>();
       attendance.forEach(a => {
-        if (fixedIds.includes(a.fixed_schedule_id) && a.is_attended) attendedDates.add(a.attend_date);
+        if (fixedIds.includes(a.fixed_schedule_id) && a.is_attended) {
+          const inMonth = a.attend_date >= `${rateYear}-${String(rateMonth).padStart(2, '0')}-01`
+            && a.attend_date <= `${rateYear}-${String(rateMonth).padStart(2, '0')}-${String(new Date(rateYear, rateMonth, 0).getDate()).padStart(2, '0')}`;
+          if (inMonth) attendedDates.add(a.attend_date);
+        }
       });
-
-      const scheduled = scheduledDates.size;
-      const attended = attendedDates.size;
-      const rate = scheduled > 0 ? Math.round((attended / scheduled) * 100) : 0;
+      const rate = scheduledDates.size > 0 ? Math.round((attendedDates.size / scheduledDates.size) * 100) : 0;
 
       const scheduleLabel = memberFixed.length === 0
         ? '-'
         : memberFixed
             .slice()
             .sort((a, b) => a.day_of_week - b.day_of_week || a.start_time.localeCompare(b.start_time))
-            .map(f => `${DAYS[f.day_of_week]} ${formatTime12(f.start_time)}`)
+            .map(f => `${DAY_LABELS[f.day_of_week]} ${formatTime12(f.start_time)}`)
             .join(', ');
 
-      const discount: '무료' | '감면' | '' =
-        member.is_discount_100 ? '무료' : member.is_discount_50 ? '감면' : '';
+      const colorTag: 'free' | 'discount' | null =
+        member.is_discount_100 ? 'free' : member.is_discount_50 ? 'discount' : null;
 
       return {
         memberId: member.id,
         memberName: member.name,
-        discount,
+        colorTag,
         scheduleLabel,
-        scheduled,
-        attended,
+        weekMarks,
         rate,
       };
     })
@@ -158,37 +202,33 @@ export default function StudentsClient({
 
       <h1 style={{ fontSize: 20, fontWeight: 600, margin: '12px 0 4px' }}>👤 {course.name} · 수강생별 출석현황</h1>
       <p style={{ fontSize: 12, color: '#888', margin: '0 0 16px' }}>
-        선택한 달의 예정 레슨 대비 실제 출석 현황입니다. (강사님 확인용)
+        한 주(월~금) 단위로 출석 날짜를 확인합니다. (강사님 확인용 · 학부모 문의 응대용)
       </p>
 
       <div className="no-print" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        <button onClick={() => setSelectedYear(y => y - 1)} style={navBtn}>◀</button>
-        <strong style={{ minWidth: 56, textAlign: 'center' }}>{selectedYear}년</strong>
-        <button onClick={() => setSelectedYear(y => y + 1)} style={navBtn}>▶</button>
-        <div style={{ display: 'flex', gap: 4, marginLeft: 8, flexWrap: 'wrap' }}>
-          {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
-            <button key={m} onClick={() => setSelectedMonth(m)} style={{
-              padding: '6px 10px', borderRadius: 5, cursor: 'pointer', fontSize: 13,
-              background: selectedMonth === m ? '#185FA5' : 'white',
-              color: selectedMonth === m ? 'white' : '#555',
-              border: `1px solid ${selectedMonth === m ? '#185FA5' : '#ddd'}`,
-            }}>{m}월</button>
-          ))}
-        </div>
+        <button onClick={prevWeek} style={navBtn}>◀</button>
+        <strong style={{ minWidth: 150, textAlign: 'center' }}>
+          {weekStart.getFullYear()}년 {fmtWeekLabel(weekStart)}
+        </strong>
+        <button onClick={nextWeek} style={navBtn}>▶</button>
+        {!isThisWeek && (
+          <button onClick={thisWeek} style={{ ...navBtn, width: 'auto', padding: '0 10px', fontSize: 12 }}>이번 주</button>
+        )}
         <button onClick={() => window.print()} style={{ ...navBtn, width: 'auto', padding: '0 12px', marginLeft: 'auto' }}>
           🖨️ 인쇄
         </button>
       </div>
 
       <p style={{ fontSize: 13, margin: '0 0 8px', color: '#444' }}>
-        {selectedYear}년 {selectedMonth}월 기준 · 수강생 {rows.length}명
+        수강생 {rows.length}명 · 출석률은 {rateYear}년 {rateMonth}월 기준
       </p>
 
       <div className="no-print" style={{
-        display: 'flex', gap: 12, fontSize: 12, color: '#666', marginBottom: 10,
+        display: 'flex', gap: 12, fontSize: 11, color: '#999', marginBottom: 10,
       }}>
         <span><span style={{ ...dotStyle, background: '#6B7280' }} />무료</span>
         <span><span style={{ ...dotStyle, background: '#2D7A6B' }} />감면</span>
+        <span style={{ color: '#bbb' }}>(색 표시 의미는 직원만 보는 안내이며, 이름 옆에는 색만 표시됩니다)</span>
       </div>
 
       {loading ? (
@@ -198,8 +238,11 @@ export default function StudentsClient({
           <thead>
             <tr style={{ borderBottom: '2px solid #eee', background: '#fafafa', textAlign: 'left' }}>
               <th style={th}>이름</th>
-              <th style={th}>요일·시간</th>
-              <th style={{ ...th, textAlign: 'center' }}>예정/출석</th>
+              {weekDates.map((d, i) => (
+                <th key={i} style={{ ...th, textAlign: 'center' }}>
+                  {d.getMonth() + 1}/{d.getDate()} {DAY_LABELS[i]}
+                </th>
+              ))}
               <th style={{ ...th, textAlign: 'right' }}>출석률</th>
             </tr>
           </thead>
@@ -207,23 +250,22 @@ export default function StudentsClient({
             {rows.map(r => (
               <tr key={r.memberId} style={{ borderBottom: '1px solid #f0f0f0' }}>
                 <td style={td}>
+                  <span style={{
+                    display: 'inline-block', width: 8, height: 8, borderRadius: 4, marginRight: 6,
+                    background: r.colorTag === 'free' ? '#6B7280' : r.colorTag === 'discount' ? '#2D7A6B' : 'transparent',
+                  }} />
                   {r.memberName}
-                  {r.discount && (
-                    <span style={{
-                      marginLeft: 6, fontSize: 11, padding: '1px 6px', borderRadius: 4, color: 'white',
-                      background: r.discount === '무료' ? '#6B7280' : '#2D7A6B',
-                    }}>{r.discount}</span>
-                  )}
                 </td>
-                <td style={{ ...td, color: '#666' }}>{r.scheduleLabel}</td>
-                <td style={{ ...td, textAlign: 'center', color: '#666' }}>{r.scheduled} / {r.attended}</td>
+                {r.weekMarks.map((mark, i) => (
+                  <td key={i} style={{ ...td, textAlign: 'center', color: '#185FA5', fontWeight: 600 }}>{mark}</td>
+                ))}
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: r.rate < 50 ? '#A32D2D' : '#1D9E75' }}>
                   {r.rate}%
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={4} style={{ ...td, textAlign: 'center', color: '#999', padding: 24 }}>수강생이 없습니다.</td></tr>
+              <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: '#999', padding: 24 }}>수강생이 없습니다.</td></tr>
             )}
           </tbody>
         </table>
