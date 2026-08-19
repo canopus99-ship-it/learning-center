@@ -2,6 +2,19 @@
 
 회원 등록 / 강좌 관리 / 수강신청 / 수납 / 출석 / 통계 기능을 제공하는 웹 시스템입니다.
 
+## 3단계: 공개 강좌 검색 페이지
+
+- `/courses-search` : 로그인 없이 누구나 링크로 접속해 강좌 기본정보(이름·요일·시간·정원·수강료)를
+  검색할 수 있는 모바일 페이지. 강좌관리(Supabase `courses`/`course_sessions`/`course_levels`
+  테이블)에 등록된 데이터를 그대로 보여주므로, 강좌관리에서 강좌를 추가/수정하면 이 페이지도
+  자동으로 갱신됩니다. 회원 개인정보나 메모(memo) 등 관리자용 정보는 노출하지 않습니다.
+- `/api/public/courses` : 위 페이지가 사용하는 공개 read-only API. 서버 전용
+  `SUPABASE_SERVICE_ROLE_KEY` 환경변수가 필요합니다 (Vercel 프로젝트 설정 > Environment
+  Variables에 추가하세요. `.env.local.example` 참고). 이 키가 없으면 `/courses-search`가
+  "강좌 정보를 불러오지 못했습니다" 에러를 보여줍니다.
+- `middleware.ts`에서 이 두 경로만 로그인 검사 대상에서 제외해뒀습니다. 다른 관리 페이지는
+  기존과 동일하게 로그인이 필요합니다.
+
 ## 2단계: 로그인 시스템 추가
 
 - Google OAuth 로그인 (jlcwc.or.kr 도메인)

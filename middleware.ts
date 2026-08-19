@@ -26,7 +26,13 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isPublicPath = path === '/login' || path.startsWith('/auth');
+  // /courses-search: 로그인 없이 누구나 볼 수 있는 공개 강좌 검색 페이지
+  // /api/public: 그 페이지가 사용하는 공개 API (강좌 기본정보만 반환, 회원정보 없음)
+  const isPublicPath =
+    path === '/login' ||
+    path.startsWith('/auth') ||
+    path === '/courses-search' ||
+    path.startsWith('/api/public');
 
   // 로그인 안 한 상태에서 보호된 페이지 접근 시도 → 로그인 페이지로
   if (!user && !isPublicPath) {
