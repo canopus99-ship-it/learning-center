@@ -23,13 +23,16 @@ type EnrollmentRow = {
   id: number;
   member_id: number;
   course_id: number;
+  course_level_id: number | null;
   members: { id: number; name: string; phone: string | null } | { id: number; name: string; phone: string | null }[] | null;
   courses: { name: string } | { name: string }[] | null;
 };
 
+type CourseLevelRow = { id: number; level_name: string };
+
 type LineItem = {
   paymentId: number;
-  courseName: string;
+  courseName: string; // 등급이 있으면 "강좌명 - 등급명" 형태로 조합
   year: number;
   month: number;
   amount: number;
@@ -93,7 +96,7 @@ export default function ReceiptClient({ ids }: { ids: number[] }) {
     const enrollmentIds = Array.from(new Set(validPayments.map((p) => p.enrollment_id)));
     const { data: enrollmentsData, error: eErr } = await supabase
       .from('enrollments')
-      .select('id, member_id, course_id, members(id, name, phone), courses(name)')
+      .select('id, member_id, course_id, course_level_id, members(id, name, phone), courses(name)')
       .in('id', enrollmentIds);
 
     if (eErr || !enrollmentsData || enrollmentsData.length === 0) {
@@ -105,6 +108,18 @@ export default function ReceiptClient({ ids }: { ids: number[] }) {
     const enrRows = enrollmentsData as unknown as EnrollmentRow[];
     const enrMap = new Map<number, EnrollmentRow>();
     enrRows.forEach((e) => enrMap.set(e.id, e));
+
+    // 등급(초급/중급/고급 등)이 걸린 수강신청이 있으면 등급명도 함께 조회
+    // (피아노교실처럼 강좌 하나에 등급별로 수강료가 다른 경우, 영수증 강좌명에 "강좌명 - 등급명"으로 표시)
+    const levelIds = Array.from(new Set(enrRows.map((e) => e.course_level_id).filter((v): v is number => !!v)));
+    const levelMap = new Map<number, string>();
+    if (levelIds.length > 0) {
+      const { data: levelsData } = await supabase
+        .from('course_levels')
+        .select('id, level_name')
+        .in('id', levelIds);
+      ((levelsData || []) as CourseLevelRow[]).forEach((lv) => levelMap.set(lv.id, lv.level_name));
+    }
 
     // 여러 회원이 섞여있으면 중단 (영수증은 한 회원 단위)
     const memberIds = new Set(enrRows.map((e) => e.member_id));
@@ -122,9 +137,11 @@ export default function ReceiptClient({ ids }: { ids: number[] }) {
       .map((p) => {
         const enr = enrMap.get(p.enrollment_id);
         const courseObj = enr ? unwrap<{ name: string }>(enr.courses) : null;
+        const baseName = courseObj?.name || '-';
+        const levelName = enr?.course_level_id ? levelMap.get(enr.course_level_id) : null;
         return {
           paymentId: p.id,
-          courseName: courseObj?.name || '-',
+          courseName: levelName ? `${baseName} - ${levelName}` : baseName,
           year: p.payment_year,
           month: p.payment_month,
           amount: p.amount,
