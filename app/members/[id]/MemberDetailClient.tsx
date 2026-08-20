@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus } from '@/lib/enrollment';
 import { PAYMENT_METHOD_LABELS } from '@/lib/payments';
+import { changeEnrollmentLevel, type CourseLevelChangeRow } from '@/lib/courseLevels';
 
 type Member = {
   id: number;
@@ -187,11 +188,40 @@ export default function MemberDetailClient({
   // 등급 강좌의 선택된 등급 ID 매핑 (course_id → level_id)
   const [selectedLevels, setSelectedLevels] = useState<Map<number, number>>(new Map());
 
+  // 등급 변경(승급) 모달
+  const [levelChangeModalOpen, setLevelChangeModalOpen] = useState(false);
+  const [levelChangeEnrollment, setLevelChangeEnrollment] = useState<Enrollment | null>(null);
+  const [newLevelId, setNewLevelId] = useState('');
+
+  // 승급 이력 (enrollment_id → 변경 기록 목록)
+  const [levelHistory, setLevelHistory] = useState<Map<number, CourseLevelChangeRow[]>>(new Map());
+
   useEffect(() => {
     loadMemos();
     loadPayments();
+    loadLevelHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadLevelHistory() {
+    const enrollmentIds = enrollments.map(e => e.id);
+    if (enrollmentIds.length === 0) {
+      setLevelHistory(new Map());
+      return;
+    }
+    const { data } = await supabase
+      .from('course_level_changes')
+      .select('*')
+      .in('enrollment_id', enrollmentIds)
+      .order('changed_at', { ascending: false });
+    const map = new Map<number, CourseLevelChangeRow[]>();
+    (data || []).forEach((row: CourseLevelChangeRow) => {
+      const list = map.get(row.enrollment_id) || [];
+      list.push(row);
+      map.set(row.enrollment_id, list);
+    });
+    setLevelHistory(map);
+  }
 
   async function loadMemos() {
     setMemosLoading(true);
@@ -248,9 +278,40 @@ export default function MemberDetailClient({
   async function reloadEnrollments() {
     const { data } = await supabase
       .from('enrollments')
-      .select('*, courses(id, name, category, is_free, fee_jung_gu, fee_other, classroom, capacity, is_active)')
+      .select('*, courses(id, name, category, is_free, fee_jung_gu, fee_other, classroom, capacity, is_active, use_levels)')
       .eq('member_id', member.id);
     setEnrollments((data as Enrollment[]) || []);
+  }
+
+  // 등급 변경(승급) 모달
+  function openLevelChangeModal(e: Enrollment) {
+    setLevelChangeEnrollment(e);
+    setNewLevelId('');
+    setLevelChangeModalOpen(true);
+  }
+
+  async function handleLevelChangeSave() {
+    if (!levelChangeEnrollment || !newLevelId) return;
+    const toLevelId = parseInt(newLevelId, 10);
+    if (toLevelId === levelChangeEnrollment.course_level_id) {
+      alert('현재와 같은 등급입니다.');
+      return;
+    }
+
+    const { error } = await changeEnrollmentLevel(
+      supabase, levelChangeEnrollment.id, levelChangeEnrollment.course_level_id ?? null, toLevelId
+    );
+    if (error) {
+      alert(error);
+      return;
+    }
+
+    const toLevelName = allLevels.find(lv => lv.id === toLevelId)?.level_name || '';
+    alert(`${levelChangeEnrollment.courses?.name}\n등급이 "${toLevelName}"(으)로 변경되었습니다.\n\n이미 결제 완료된 이전 달의 영수증·일별현황은 변경 전 등급으로 그대로 유지됩니다.`);
+    setLevelChangeModalOpen(false);
+    setLevelChangeEnrollment(null);
+    await reloadEnrollments();
+    await loadLevelHistory();
   }
 
   function handlePhoneChange(value: string) {
@@ -918,12 +979,36 @@ export default function MemberDetailClient({
               </tr>
             </thead>
             <tbody>
-              {activeEnrollments.map((e) => (
+              {activeEnrollments.map((e) => {
+                const history = levelHistory.get(e.id) || [];
+                return (
                 <tr key={e.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                   <td style={tdStyle}>
                     <Link href={`/courses/${e.course_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}>
                       <strong>{e.courses?.name || '-'}</strong>
                     </Link>
+                    {e.courses?.use_levels && e.course_level_id && (() => {
+                      const lv = allLevels.find(l => l.id === e.course_level_id);
+                      return lv ? (
+                        <span style={{ marginLeft: 6, fontSize: 10, padding: '2px 6px', background: '#7B3FBF', color: 'white', borderRadius: 3 }}>
+                          {lv.level_name}
+                        </span>
+                      ) : null;
+                    })()}
+                    {history.length > 0 && (
+                      <details style={{ marginTop: 4 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: 11, color: '#888' }}>승급 이력 ({history.length})</summary>
+                        <ul style={{ margin: '4px 0 0', paddingLeft: 16, fontSize: 11, color: '#888' }}>
+                          {history.map(h => {
+                            const fromName = h.from_level_id ? (allLevels.find(l => l.id === h.from_level_id)?.level_name || '-') : '(미지정)';
+                            const toName = allLevels.find(l => l.id === h.to_level_id)?.level_name || '-';
+                            return (
+                              <li key={h.id}>{h.changed_at.substring(0, 10)}: {fromName} → {toName}</li>
+                            );
+                          })}
+                        </ul>
+                      </details>
+                    )}
                   </td>
                   <td style={tdStyle}>
                     {e.courses && <span style={badgeStyle(COURSE_CATEGORY_COLORS[e.courses.category] || '#666')}>{e.courses.category}</span>}
@@ -942,10 +1027,20 @@ export default function MemberDetailClient({
                     {e.status === 'waiting' && (
                       <button onClick={() => handleChangeEnrollmentStatus(e, 'active')} style={smallBtnStyle}>수강 전환</button>
                     )}
+                    {e.courses?.use_levels && e.status !== 'ended' && (
+                      <button
+                        onClick={() => openLevelChangeModal(e)}
+                        style={{ ...smallBtnStyle, color: '#7B3FBF' }}
+                        title="등급을 변경합니다 (예: 초급 → 중급 승급)"
+                      >
+                        🎓 등급변경
+                      </button>
+                    )}
                     <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>수강신청 취소</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         ) : null}
@@ -1224,6 +1319,64 @@ export default function MemberDetailClient({
                 fontSize: 14, fontWeight: 500,
               }}>🛑 수강 종료 처리</button>
               <button onClick={() => { setEndModalOpen(false); setEndingEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================ */}
+      {/* 등급 변경(승급) 모달                            */}
+      {/* ============================================ */}
+      {levelChangeModalOpen && levelChangeEnrollment && (
+        <div style={modalOverlayStyle}>
+          <div style={modalContentStyle}>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>🎓 등급 변경</h2>
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+              <strong>{member.name}</strong> · {levelChangeEnrollment.courses?.name}
+            </p>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>현재 등급</label>
+              <p style={{ fontSize: 14, margin: '4px 0 0' }}>
+                {allLevels.find(lv => lv.id === levelChangeEnrollment.course_level_id)?.level_name || '(등급 미지정)'}
+              </p>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>변경할 등급</label>
+              <select value={newLevelId} onChange={(e) => setNewLevelId(e.target.value)} style={inputStyle}>
+                <option value="">선택하세요</option>
+                {allLevels
+                  .filter(lv => lv.course_id === levelChangeEnrollment.course_id)
+                  .sort((a, b) => a.sort_order - b.sort_order)
+                  .map(lv => (
+                    <option key={lv.id} value={lv.id}>{lv.level_name}</option>
+                  ))}
+              </select>
+            </div>
+
+            <div style={{
+              background: '#FFF8E1', border: '1px solid #FFE082',
+              padding: 10, borderRadius: 6, fontSize: 11, color: '#5D4037', marginBottom: 16,
+            }}>
+              💡 이미 결제 완료된 이전 달의 영수증·일별결제현황은 변경 전 등급으로 그대로 유지됩니다.
+              앞으로 새로 등록되는 결제부터 새 등급이 적용됩니다.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={handleLevelChangeSave}
+                disabled={!newLevelId}
+                style={{
+                  flex: 1, padding: '12px',
+                  background: newLevelId ? '#7B3FBF' : '#ccc', color: 'white',
+                  border: 'none', borderRadius: 6, cursor: newLevelId ? 'pointer' : 'not-allowed',
+                  fontSize: 14, fontWeight: 500,
+                }}
+              >
+                🎓 등급 변경 저장
+              </button>
+              <button onClick={() => { setLevelChangeModalOpen(false); setLevelChangeEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
             </div>
           </div>
         </div>

@@ -16,6 +16,7 @@ import {
 } from '@/lib/payments';
 import { STATUS_LABELS, type EnrollmentStatus } from '@/lib/enrollment';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { changeEnrollmentLevel } from '@/lib/courseLevels';
 import * as XLSX from 'xlsx';
 
 type Course = {
@@ -77,6 +78,7 @@ type Payment = {
   paid_at: string | null;
   payment_method: PaymentMethod | null;
   receipt_number: string | null;
+  course_level_id?: number | null;
   is_annual: boolean;
   is_free: boolean;
   memo: string | null;
@@ -183,6 +185,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const [carryoverModalOpen, setCarryoverModalOpen] = useState(false);
   const [carryoverDate, setCarryoverDate] = useState(new Date().toISOString().split('T')[0]);
   const [carryoverAmounts, setCarryoverAmounts] = useState<Record<string, number>>({});
+
+  // 등급 변경(승급) 모달 - 피아노교실처럼 등급별 수강료가 있는 강좌에서
+  // 기존 수강신청을 그대로 둔 채 등급만 바꿔주는 용도 (재등록 불필요)
+  const [levelChangeModalOpen, setLevelChangeModalOpen] = useState(false);
+  const [levelChangeTarget, setLevelChangeTarget] = useState<{ enrollment: Enrollment; course: Course } | null>(null);
+  const [newLevelId, setNewLevelId] = useState('');
 
   useEffect(() => {
     loadData();
@@ -472,6 +480,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         const perMonthAmount = Math.floor(totalAmount / 10);
 
         for (let m = 2; m <= 12; m++) {
+          const existingPayment = getPayment(enrollment.id, m);
           const data = {
             enrollment_id: enrollment.id,
             payment_year: selectedYear,
@@ -484,6 +493,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
             is_annual: true,
             is_free: course.is_free || calc.discountType === 'discount_100',
             discount_type: calc.discountType,
+            // 등급 강좌면 결제 시점의 등급을 저장. 이미 등급이 저장된 기존 결제건이면 그대로 유지하고,
+            // 새로 생기는 결제건만 현재 등급을 스냅샷함 → 승급 후 예전 달을 재처리해도 그 달 기록은 안 바뀜.
+            course_level_id: course.use_levels
+              ? (existingPayment?.course_level_id ?? enrollment.course_level_id ?? null)
+              : null,
             updated_at: new Date().toISOString(),
           };
 
@@ -502,6 +516,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       } else {
         // 개별 월 결제
         const cellAmount = cellAmounts[`${item.courseId}-${item.month}`] ?? item.amount;
+        const existingPayment = getPayment(enrollment.id, item.month);
 
         const data = {
           enrollment_id: enrollment.id,
@@ -515,6 +530,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           is_annual: false,
           is_free: course.is_free || calc.discountType === 'discount_100' || cellAmount === 0,
           discount_type: calc.discountType,
+          // 등급 강좌면 결제 시점의 등급을 저장. 이미 등급이 저장된 기존 결제건이면 그대로 유지하고,
+          // 새로 생기는 결제건만 현재 등급을 스냅샷함 → 승급 후 예전 달을 재처리해도 그 달 기록은 안 바뀜.
+          course_level_id: course.use_levels
+            ? (existingPayment?.course_level_id ?? enrollment.course_level_id ?? null)
+            : null,
           updated_at: new Date().toISOString(),
         };
 
@@ -587,6 +607,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       receipt_number: receiptNum || null,
       is_free: course.is_free || calc.discountType === 'discount_100',
       discount_type: calc.discountType,
+      // 등급 강좌면 결제 시점의 등급을 저장. 이미 등급이 저장된 기존 결제건을 수정하는 경우엔
+      // (예: 나중에 결제방법만 정정) 원래 등급을 그대로 유지하고, 새로 생기는 결제건만 현재 등급을 스냅샷함.
+      // → 승급 이후에 예전 달 결제를 고쳐도 그 달의 등급 기록이 바뀌지 않음.
+      course_level_id: course.use_levels
+        ? (existing?.course_level_id ?? enrollment.course_level_id ?? null)
+        : null,
       memo: payMemo || null,
       updated_at: new Date().toISOString(),
     };
@@ -676,6 +702,36 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       setEndingEnrollment(null);
       loadData();
     }
+  }
+
+  // 등급 변경(승급) 모달
+  function openLevelChangeModal(enrollment: Enrollment, course: Course) {
+    setLevelChangeTarget({ enrollment, course });
+    setNewLevelId('');
+    setLevelChangeModalOpen(true);
+  }
+
+  async function handleLevelChangeSave() {
+    if (!levelChangeTarget || !newLevelId) return;
+    const { enrollment, course } = levelChangeTarget;
+    const toLevelId = parseInt(newLevelId, 10);
+    if (toLevelId === enrollment.course_level_id) {
+      alert('현재와 같은 등급입니다.');
+      return;
+    }
+
+    const { error } = await changeEnrollmentLevel(supabase, enrollment.id, enrollment.course_level_id ?? null, toLevelId);
+    if (error) {
+      alert(error);
+      return;
+    }
+
+    const memberName = enrollment.members?.name || '회원';
+    const toLevelName = courseLevels.find(lv => lv.id === toLevelId)?.level_name || '';
+    alert(`${memberName}님 / ${course.name}\n등급이 "${toLevelName}"(으)로 변경되었습니다.\n\n이미 결제 완료된 이전 달의 영수증·일별현황은 변경 전 등급으로 그대로 유지됩니다.`);
+    setLevelChangeModalOpen(false);
+    setLevelChangeTarget(null);
+    loadData();
   }
 
   // 수납/환불/이월 취소
@@ -1789,6 +1845,14 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   {e.status === 'paused' && (
                                     <span style={{ marginLeft: 4, fontSize: 10, padding: '1px 5px', background: '#7B3FBF', color: 'white', borderRadius: 3 }}>일시중지</span>
                                   )}
+                                  {course.use_levels && e.course_level_id && (() => {
+                                    const lv = courseLevels.find(l => l.id === e.course_level_id);
+                                    return lv ? (
+                                      <span style={{ marginLeft: 4, fontSize: 10, padding: '1px 5px', background: '#7B3FBF', color: 'white', borderRadius: 3 }}>
+                                        {lv.level_name}
+                                      </span>
+                                    ) : null;
+                                  })()}
                                 </td>
                                 <td style={tdStyle}>{member.phone || '-'}</td>
                                 <td style={tdStyle}><span style={badgeStyle(statusColor)}>{statusLabel}</span></td>
@@ -1798,6 +1862,15 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     <button onClick={() => openPaymentModal(e, course, selectedMonth)} style={smallBtnStyle}>
                                       {p?.is_paid ? '수정' : '결제처리'}
                                     </button>
+                                    {course.use_levels && e.status !== 'ended' && (
+                                      <button
+                                        onClick={() => openLevelChangeModal(e, course)}
+                                        style={{ ...smallBtnStyle, color: '#7B3FBF' }}
+                                        title="등급을 변경합니다 (예: 초급 → 중급 승급)"
+                                      >
+                                        🎓 등급변경
+                                      </button>
+                                    )}
                                     {e.status === 'ended' ? (
                                       <span style={{ fontSize: 11, color: '#888', padding: '4px 6px' }}>
                                         🛑 종료{(e as any).end_date ? ` (${(e as any).end_date})` : ''}
@@ -2351,6 +2424,65 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           </div>
         </div>
       )}
+
+      {/* ============================================ */}
+      {/* 등급 변경(승급) 모달                            */}
+      {/* ============================================ */}
+      {levelChangeModalOpen && levelChangeTarget && (
+        <div style={modalOverlayStyle}>
+          <div style={modalContentStyle}>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>🎓 등급 변경</h2>
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px' }}>
+              <strong>{levelChangeTarget.enrollment.members?.name}</strong> · {levelChangeTarget.course.name}
+            </p>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>현재 등급</label>
+              <p style={{ fontSize: 14, margin: '4px 0 0' }}>
+                {courseLevels.find(lv => lv.id === levelChangeTarget.enrollment.course_level_id)?.level_name || '(등급 미지정)'}
+              </p>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={labelStyle}>변경할 등급</label>
+              <select value={newLevelId} onChange={(e) => setNewLevelId(e.target.value)} style={inputStyle}>
+                <option value="">선택하세요</option>
+                {courseLevels
+                  .filter(lv => lv.course_id === levelChangeTarget.course.id)
+                  .sort((a, b) => a.sort_order - b.sort_order)
+                  .map(lv => (
+                    <option key={lv.id} value={lv.id}>{lv.level_name}</option>
+                  ))}
+              </select>
+            </div>
+
+            <div style={{
+              background: '#FFF8E1', border: '1px solid #FFE082',
+              padding: 10, borderRadius: 6, fontSize: 11, color: '#5D4037', marginBottom: 16,
+            }}>
+              💡 이미 결제 완료된 이전 달의 영수증·일별결제현황은 변경 전 등급으로 그대로 유지됩니다.
+              앞으로 새로 등록되는 결제부터 새 등급이 적용됩니다.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={handleLevelChangeSave}
+                disabled={!newLevelId}
+                style={{
+                  flex: 1, padding: '12px',
+                  background: newLevelId ? '#7B3FBF' : '#ccc', color: 'white',
+                  border: 'none', borderRadius: 6, cursor: newLevelId ? 'pointer' : 'not-allowed',
+                  fontSize: 14, fontWeight: 500,
+                }}
+              >
+                🎓 등급 변경 저장
+              </button>
+              <button onClick={() => { setLevelChangeModalOpen(false); setLevelChangeTarget(null); }} style={secondaryBtnStyle}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ============================================ */}
       {/* 재등록 모달                                      */}
       {/* ============================================ */}

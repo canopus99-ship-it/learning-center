@@ -12,6 +12,9 @@ type PaymentRow = {
   payment_month: number;
   amount: number;
   payment_method: PaymentMethod | null;
+  // 결제 시점에 스냅샷된 등급. 승급 이후에도 이 결제건은 원래 등급 그대로 유지됨.
+  // 이 컬럼 추가 이전에 만들어진 예전 결제건은 null이므로, 그 경우엔 enrollment의 현재 등급으로 대체 표시.
+  course_level_id: number | null;
 };
 
 type EnrollmentRow = {
@@ -71,7 +74,7 @@ export default function DailyReportClient({ initialDate }: { initialDate: string
 
     const { data: paymentsData } = await supabase
       .from('payments')
-      .select('id, enrollment_id, payment_year, payment_month, amount, payment_method, is_paid, status_type')
+      .select('id, enrollment_id, payment_year, payment_month, amount, payment_method, is_paid, status_type, course_level_id')
       .eq('paid_at', date);
 
     // 결제완료 & 환불/이월되지 않은 건만 (환불·이월은 그날의 실제 수입이 아니므로 제외)
@@ -95,13 +98,13 @@ export default function DailyReportClient({ initialDate }: { initialDate: string
 
     // 등급(초급/중급/고급 등)이 걸린 수강신청이 있으면 등급명도 함께 조회
     // (피아노교실처럼 강좌 하나에 등급별로 수강료가 다른 경우, 강좌명 란에 "강좌명 - 등급명"으로 표시)
-    const levelIds = Array.from(
-      new Set(
-        ((enrollmentsData || []) as unknown as EnrollmentRow[])
-          .map((e) => e.course_level_id)
-          .filter((v): v is number => !!v)
-      )
-    );
+    // 결제건 자체에 스냅샷된 등급(course_level_id)과, 그게 없는 예전 결제건을 위한 enrollment의 현재 등급을 모두 모은다.
+    const levelIds = Array.from(new Set([
+      ...validPayments.map((p) => p.course_level_id).filter((v): v is number => !!v),
+      ...((enrollmentsData || []) as unknown as EnrollmentRow[])
+        .map((e) => e.course_level_id)
+        .filter((v): v is number => !!v),
+    ]));
     const levelMap = new Map<number, string>();
     if (levelIds.length > 0) {
       const { data: levelsData } = await supabase
@@ -120,7 +123,10 @@ export default function DailyReportClient({ initialDate }: { initialDate: string
       if (!memberObj) return;
 
       const baseCourseName = courseObj?.name || '-';
-      const levelName = enr.course_level_id ? levelMap.get(enr.course_level_id) : null;
+      // 이 결제건에 등급이 스냅샷되어 있으면 그걸 우선 사용(승급 전후 관계없이 그 당시 등급 그대로).
+      // 스냅샷이 없는 예전 결제건(이 기능 추가 이전)은 enrollment의 현재 등급으로 대체 표시.
+      const effectiveLevelId = p.course_level_id ?? enr.course_level_id ?? null;
+      const levelName = effectiveLevelId ? levelMap.get(effectiveLevelId) : null;
 
       const line: Line = {
         paymentId: p.id,
