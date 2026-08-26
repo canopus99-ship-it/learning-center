@@ -31,6 +31,7 @@ type FixedSchedule = {
   start_time: string;
   duration_minutes: number;
   effective_from: string; // YYYY-MM-DD (등록한 주 월요일)
+  effective_until: string | null; // YYYY-MM-DD (영구 변경으로 대체된 경우, 마지막으로 유효했던 주의 일요일)
   memo: string | null;
 };
 
@@ -75,6 +76,12 @@ function trimTime(t: string): string {
   return t ? t.substring(0, 5) : '';
 }
 
+// YYYY-MM-DD → 0=월~6=일
+function dateStrToDow(dateStr: string): number {
+  const day = new Date(dateStr + 'T00:00:00').getDay();
+  return day === 0 ? 6 : day - 1;
+}
+
 function fmtWeekLabel(monday: Date): string {
   const sunday = addDays(monday, 6);
   return `${monday.getMonth() + 1}/${monday.getDate()} ~ ${sunday.getMonth() + 1}/${sunday.getDate()}`;
@@ -116,6 +123,7 @@ export default function LessonScheduleClient({
 
   // 폼
   const [formEnrollmentId, setFormEnrollmentId] = useState('');
+  const [formDay, setFormDay] = useState(0); // 0=월~4=금 (이번 주만 변경 / 영구 변경 공통)
   const [formTime, setFormTime] = useState('10:00');
   const [formDur, setFormDur] = useState<'10' | '15'>('15');
   const [saving, setSaving] = useState(false);
@@ -130,6 +138,9 @@ export default function LessonScheduleClient({
         .select('*')
         .eq('course_id', course.id)
         .lte('effective_from', weekStartStr)
+        // 영구 변경으로 대체된 예전 스케줄은 그 유효기간(effective_until)이 지난 주에서는 제외.
+        // effective_until이 없으면(=아직 대체 안 됨) 계속 유효한 것으로 봄.
+        .or(`effective_until.is.null,effective_until.gte.${weekStartStr}`)
         .order('day_of_week')
         .order('start_time'),
       supabase
@@ -226,6 +237,7 @@ export default function LessonScheduleClient({
   function openEditFixed(f: FixedSchedule) {
     setSelectedFixed(f);
     setSelectedOverride(null);
+    setFormDay(f.day_of_week);
     setFormTime(trimTime(f.start_time));
     setFormDur(f.duration_minutes === 10 ? '10' : '15');
     setModal('edit-fixed');
@@ -234,6 +246,7 @@ export default function LessonScheduleClient({
   function openEditOverride(f: FixedSchedule, o: OverrideSchedule) {
     setSelectedFixed(f);
     setSelectedOverride(o);
+    setFormDay(dateStrToDow(o.schedule_date));
     setFormTime(trimTime(o.start_time));
     setFormDur(o.duration_minutes === 10 ? '10' : '15');
     setModal('edit-override');
@@ -263,12 +276,12 @@ export default function LessonScheduleClient({
     loadData();
   }
 
-  // 이번 주 시간 변경 저장
+  // 이번 주 시간 변경 저장 (요일도 함께 변경 가능 - formDay 기준)
   async function handleThisWeekChange() {
     if (!selectedFixed) return;
     setSaving(true);
-    const scheduleDate = ymd(addDays(weekStart, modalDay >= 0 ? modalDay : selectedFixed.day_of_week));
-    const targetDate = ymd(addDays(weekStart, selectedFixed.day_of_week));
+    // 요일이 바뀌었을 수 있으므로, 원래 고정 요일이 아니라 사용자가 고른 formDay로 이번 주 날짜를 계산
+    const targetDate = ymd(addDays(weekStart, formDay));
 
     // 기존 override 있으면 update, 없으면 insert
     if (selectedOverride) {
@@ -362,21 +375,53 @@ export default function LessonScheduleClient({
     loadData();
   }
 
-  // 고정 시간 영구 변경
+  // 고정 시간 영구 변경 (요일도 함께 변경 가능)
+  //
+  // 예전에는 기존 행(row)을 그대로 update해서, 과거에 등록되어 있던 시간까지 전부 바뀌어버리는
+  // 문제가 있었음. 이제는 기존 행은 "여기까지만 유효했다(effective_until)"로 마감하고,
+  // 새 요일/시간은 새 행으로 따로 등록해서 앞으로의 스케줄에만 적용되도록 함.
+  // (과거 출석 기록은 계속 예전 행의 id를 참조하므로 그대로 유지됨)
+  //
+  // 적용 시작 주는 "지금 보고 있는 주"와 "이번 주(오늘 기준)" 중 더 늦은 쪽으로 함:
+  // 과거 주를 보다가 실수로 눌러도 과거 기록은 절대 건드리지 않고, 미리 몇 주 뒤를 보면서
+  // 미래 시점으로 예약하는 것은 그대로 가능하게 하기 위함.
   async function handlePermanentChange() {
     if (!selectedFixed) return;
-    if (!confirm('고정 스케줄을 영구적으로 변경합니다.\n이번 주 포함 이후 모든 주에 적용됩니다.')) return;
+    const todayMonday = getMonday(today);
+    const changeFromMonday = weekStart > todayMonday ? weekStart : todayMonday;
+    const changeFromStr = ymd(changeFromMonday);
+
+    if (!confirm(`고정 스케줄을 영구적으로 변경합니다.\n${changeFromMonday.getFullYear()}년 ${fmtWeekLabel(changeFromMonday)} 주부터 적용되며, 그 이전 기록은 그대로 유지됩니다.`)) return;
     setSaving(true);
-    const { error } = await supabase.from('lesson_fixed_schedules').update({
+
+    // 1) 기존 고정 스케줄은 새 스케줄 시작 전 주(일요일)까지만 유효한 것으로 마감
+    const oldUntil = ymd(addDays(changeFromMonday, -1));
+    const { error: closeErr } = await supabase
+      .from('lesson_fixed_schedules')
+      .update({ effective_until: oldUntil })
+      .eq('id', selectedFixed.id);
+    if (closeErr) { setSaving(false); alert('실패: ' + closeErr.message); return; }
+
+    // 2) 새 요일/시간으로 새 고정 스케줄 행 등록
+    const { error: insErr } = await supabase.from('lesson_fixed_schedules').insert({
+      course_id: course.id,
+      enrollment_id: selectedFixed.enrollment_id,
+      member_id: selectedFixed.member_id,
+      day_of_week: formDay,
       start_time: formTime,
       duration_minutes: parseInt(formDur, 10),
-    }).eq('id', selectedFixed.id);
-    // 이번 주 override가 있으면 삭제 (고정이 바뀌었으니)
-    if (selectedOverride) {
+      effective_from: changeFromStr,
+      memo: selectedFixed.memo,
+    });
+    if (insErr) { setSaving(false); alert('실패: ' + insErr.message); return; }
+
+    // 3) 지금 보고 있는 주가 곧 변경 시작 주라면, 그 주에 걸려있던 "이번 주만 변경" 기록은
+    //    새 고정 스케줄로 대체되는 것이므로 정리 (그보다 이전 주의 override는 과거 기록이라 건드리지 않음)
+    if (selectedOverride && ymd(weekStart) === changeFromStr) {
       await supabase.from('lesson_schedules').delete().eq('id', selectedOverride.id);
     }
+
     setSaving(false);
-    if (error) { alert('실패: ' + error.message); return; }
     setModal(null);
     loadData();
   }
@@ -590,6 +635,13 @@ export default function LessonScheduleClient({
                 {/* 이번 주 변경 섹션 */}
                 <div style={{ background: '#F8F9FF', borderRadius: 8, padding: 12, marginBottom: 12 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#444', marginBottom: 8 }}>이번 주만 변경</div>
+                  <p style={{ fontSize: 11, color: '#888', margin: '0 0 8px' }}>
+                    아래 요일/시간은 "이번 주 저장"과 "영구 변경 적용" 두 버튼에 공통으로 적용됩니다.
+                  </p>
+                  <label style={{ ...labelStyle, fontSize: 11 }}>요일</label>
+                  <select value={formDay} onChange={e => setFormDay(parseInt(e.target.value, 10))} style={{ ...inputStyle, marginBottom: 8 }}>
+                    {DAYS.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
+                  </select>
                   <label style={{ ...labelStyle, fontSize: 11 }}>시작 시간</label>
                   <select value={formTime} onChange={e => setFormTime(e.target.value)} style={{ ...inputStyle, marginBottom: 8 }}>
                     {TIME_OPTIONS.map(t => <option key={t} value={t}>{formatTime12(t)}</option>)}
@@ -626,7 +678,9 @@ export default function LessonScheduleClient({
                 {/* 영구 변경 섹션 */}
                 <div style={{ background: '#FFF8F0', borderRadius: 8, padding: 12, marginBottom: 12 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: '#444', marginBottom: 6 }}>고정 시간 영구 변경</div>
-                  <p style={{ fontSize: 11, color: '#888', margin: '0 0 8px' }}>위 시간/분 선택 후 아래 버튼 클릭</p>
+                  <p style={{ fontSize: 11, color: '#888', margin: '0 0 8px' }}>
+                    위에서 고른 요일/시간/분으로 앞으로의 스케줄이 바뀝니다. 이미 지난 주 기록은 바뀌지 않습니다.
+                  </p>
                   <button onClick={handlePermanentChange} disabled={saving} style={{
                     width: '100%', padding: '7px 0', borderRadius: 6, cursor: 'pointer',
                     background: 'white', border: '1px solid #E8A800', color: '#B8860B', fontSize: 12,

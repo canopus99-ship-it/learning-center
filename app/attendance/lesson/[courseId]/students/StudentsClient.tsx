@@ -16,6 +16,7 @@ type FixedSchedule = {
   start_time: string;
   duration_minutes: number;
   effective_from: string;
+  effective_until: string | null;
 };
 type AttendanceRecord = { fixed_schedule_id: number; attend_date: string; is_attended: boolean };
 
@@ -150,7 +151,13 @@ export default function StudentsClient({
       monthWeekdays.forEach(d => {
         const scheduleDow = d.getDay() - 1; // 0=월~4=금
         const dateStr = ymd(d);
-        const applicable = memberFixed.some(f => f.day_of_week === scheduleDow && f.effective_from <= dateStr);
+        // 그 날짜에 실제로 유효했던 고정 스케줄만 대상으로 함
+        // (영구 변경으로 이미 대체된 예전 스케줄은 effective_until 이후 날짜에서 제외)
+        const applicable = memberFixed.some(f =>
+          f.day_of_week === scheduleDow &&
+          f.effective_from <= dateStr &&
+          (!f.effective_until || dateStr <= f.effective_until)
+        );
         if (applicable) scheduledDates.add(dateStr);
       });
       const attendedDates = new Set<string>();
@@ -163,9 +170,15 @@ export default function StudentsClient({
       });
       const rate = scheduledDates.size > 0 ? Math.round((attendedDates.size / scheduledDates.size) * 100) : 0;
 
-      const scheduleLabel = memberFixed.length === 0
+      // 화면에 표시할 스케줄 요약은 "지금 보고 있는 주"에 실제로 유효한 것만 (예전에 영구 변경으로
+      // 대체된 스케줄이 같이 나와서 헷갈리지 않도록)
+      const weekStr = ymd(weekStart);
+      const currentFixed = memberFixed.filter(f =>
+        f.effective_from <= weekStr && (!f.effective_until || f.effective_until >= weekStr)
+      );
+      const scheduleLabel = currentFixed.length === 0
         ? '-'
-        : memberFixed
+        : currentFixed
             .slice()
             .sort((a, b) => a.day_of_week - b.day_of_week || a.start_time.localeCompare(b.start_time))
             .map(f => `${DAY_LABELS[f.day_of_week]} ${formatTime12(f.start_time)}`)

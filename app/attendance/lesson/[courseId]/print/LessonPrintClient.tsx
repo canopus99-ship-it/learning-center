@@ -20,6 +20,7 @@ type FixedSchedule = {
   start_time: string;
   duration_minutes: number;
   effective_from: string;
+  effective_until: string | null;
 };
 type AttendanceRecord = {
   fixed_schedule_id: number;
@@ -122,8 +123,12 @@ export default function LessonPrintClient({
   const totalPages = studentPages * datePages;
 
   // 주간 스케줄표 데이터: 요일×시간 정렬
+  // (출석부 모드와 달리 이건 "지금 벽에 붙여두는 현재 스케줄표"이므로, 영구 변경으로
+  // 이미 대체된 예전 스케줄(effective_until이 오늘 이전)은 제외하고 현재 유효한 것만 표시)
+  const todayStr = ymd(today);
   const scheduleByDay: Record<number, FixedSchedule[]> = { 0: [], 1: [], 2: [], 3: [], 4: [] };
   fixedSchedules.forEach(f => {
+    if (f.effective_until && f.effective_until < todayStr) return;
     if (f.day_of_week >= 0 && f.day_of_week <= 4) {
       scheduleByDay[f.day_of_week].push(f);
     }

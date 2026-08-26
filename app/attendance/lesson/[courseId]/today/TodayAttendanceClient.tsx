@@ -24,6 +24,7 @@ type FixedSchedule = {
   start_time: string;
   duration_minutes: number;
   effective_from: string;
+  effective_until: string | null;
 };
 
 type OverrideSchedule = {
@@ -115,6 +116,8 @@ export default function TodayAttendanceClient({
       .eq('course_id', course.id)
       .eq('day_of_week', dow)
       .lte('effective_from', weekStartStr)
+      // 영구 변경으로 대체된 예전 스케줄(오늘 기준 이미 지남)은 제외
+      .or(`effective_until.is.null,effective_until.gte.${weekStartStr}`)
       .order('start_time');
 
     // 이번 주 override (오늘 날짜 기준)
