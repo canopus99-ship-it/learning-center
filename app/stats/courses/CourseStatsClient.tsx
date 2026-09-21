@@ -11,6 +11,7 @@ type Course = {
   category: string;
   name: string;
   is_active: boolean;
+  is_lesson?: boolean;
 };
 
 type Enrollment = {
@@ -33,6 +34,16 @@ type AttendanceRow = {
   enrollment_id: number;
   course_date_id: number;
   is_present: boolean;
+};
+
+// 레슨 강좌(피아노 등, is_lesson=true)는 일반 강좌와 달리 course_dates/attendance를 쓰지 않고
+// 개인별 스케줄 + lesson_attendance 테이블로 출석을 관리한다. 이 테이블은 course_id/member_id/
+// attend_date를 직접 가지고 있어 별도의 join 없이 바로 통계에 반영할 수 있다.
+type LessonAttendanceRow = {
+  course_id: number;
+  member_id: number;
+  attend_date: string;
+  is_attended: boolean;
 };
 
 type Member = {
@@ -128,6 +139,7 @@ export default function CourseStatsClient() {
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [courseDates, setCourseDates] = useState<CourseDate[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRow[]>([]);
+  const [lessonAttendance, setLessonAttendance] = useState<LessonAttendanceRow[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -158,8 +170,8 @@ export default function CourseStatsClient() {
     const last = monthBounds(months[months.length - 1].y, months[months.length - 1].m);
 
     // 회원/강좌 수가 늘면 1000행을 넘을 수 있어 전부 페이지 단위로 끝까지 가져옴
-    const [cRes, eRes, dRes, mRes] = await Promise.all([
-      supabase.from('courses').select('id, category, name, is_active').order('category').order('name'),
+    const [cRes, eRes, dRes, mRes, laRes] = await Promise.all([
+      supabase.from('courses').select('id, category, name, is_active, is_lesson').order('category').order('name'),
       // enrollment은 enrollment_id → member_id 매핑용 (출석 분석에 필요)
       fetchAllRows<Enrollment>((from, to) =>
         supabase.from('enrollments').select('id, member_id, course_id, status, enrolled_at, end_date').range(from, to)
@@ -176,6 +188,16 @@ export default function CourseStatsClient() {
       // 상세통계(성별/연령/지역)용 회원 정보
       fetchAllRows<Member>((from, to) =>
         supabase.from('members').select('id, gender, birth_date, region_type, is_jung_gu').range(from, to)
+      ),
+      // 레슨 강좌(피아노 등)는 course_dates/attendance를 쓰지 않으므로 별도로 조회
+      fetchAllRows<LessonAttendanceRow>((from, to) =>
+        supabase
+          .from('lesson_attendance')
+          .select('course_id, member_id, attend_date, is_attended')
+          .eq('is_attended', true)
+          .gte('attend_date', first.start)
+          .lte('attend_date', last.end)
+          .range(from, to)
       ),
     ]);
 
@@ -203,6 +225,7 @@ export default function CourseStatsClient() {
     setEnrollments((eRes.data || []) as Enrollment[]);
     setCourseDates((dRes.data || []) as CourseDate[]);
     setAttendance(attRes.data || []);
+    setLessonAttendance((laRes.data || []) as LessonAttendanceRow[]);
     setMembers((mRes.data || []) as Member[]);
     setLoading(false);
   }
@@ -253,6 +276,24 @@ export default function CourseStatsClient() {
       attendanceCounts.set(key, (attendanceCounts.get(key) || 0) + 1);
     });
 
+    // 레슨 강좌(피아노 등)는 course_dates/attendance가 아니라 lesson_attendance로 출석을 관리하므로
+    // 실인원/연인원은 여기서 같은 방식(key: `${courseId}-${y}-${m}`)으로 합쳐서 넣어준다.
+    // 강의횟수는 "그 강좌에서 그 달에 실제로 출석이 있었던 서로 다른 날짜 수"로 별도 집계한다
+    // (개인별 스케줄이라 날짜가 제각각이라도, 일반 강좌와 같은 정의 - 출석이 있었던 날 수 - 를 그대로 적용).
+    const lessonSessionDates = new Map<string, Set<string>>();
+
+    lessonAttendance.forEach(a => {
+      if (!a.is_attended) return;
+      const y = parseInt(a.attend_date.substring(0, 4), 10);
+      const m = parseInt(a.attend_date.substring(5, 7), 10);
+      const key = `${a.course_id}-${y}-${m}`;
+      if (!attendedMembers.has(key)) attendedMembers.set(key, new Set());
+      attendedMembers.get(key)!.add(a.member_id);
+      attendanceCounts.set(key, (attendanceCounts.get(key) || 0) + 1);
+      if (!lessonSessionDates.has(key)) lessonSessionDates.set(key, new Set());
+      lessonSessionDates.get(key)!.add(a.attend_date);
+    });
+
     // 전월 키 계산 헬퍼
     function prevMonthKey(y: number, m: number): string {
       if (m === 1) return `${y - 1}-12`;
@@ -273,10 +314,13 @@ export default function CourseStatsClient() {
         const { start, end } = monthBounds(y, m);
 
         // 강의 횟수
-        const sessions = courseDates.filter(d =>
-          d.course_id === course.id && !d.is_cancelled &&
-          d.class_date >= start && d.class_date <= end
-        ).length;
+        const sessions = course.is_lesson
+          // 레슨 강좌: course_dates가 없으므로 lesson_attendance 기준 "출석이 있었던 날짜 수"로 집계
+          ? (lessonSessionDates.get(`${course.id}-${monthKey}`)?.size || 0)
+          : courseDates.filter(d =>
+              d.course_id === course.id && !d.is_cancelled &&
+              d.class_date >= start && d.class_date <= end
+            ).length;
 
         // 그 달 출석 회원 (member_id Set)
         const thisMonthSet = attendedMembers.get(`${course.id}-${monthKey}`) || new Set<number>();
@@ -311,7 +355,7 @@ export default function CourseStatsClient() {
     });
 
     return result;
-  }, [courses, enrollments, courseDates, attendance, months]);
+  }, [courses, enrollments, courseDates, attendance, lessonAttendance, months]);
 
   // 상세통계: 강좌×월별 + 전체기간(합계) 성별/연령/지역 실인원·연인원
   // 실인원(합계)은 매월 숫자를 그냥 더하면 같은 사람이 여러 달 중복 집계되므로,
@@ -369,6 +413,27 @@ export default function CourseStatsClient() {
       if (regionLabel) bump(info.courseId, info.monthKey, 'region', regionLabel, memberId);
     });
 
+    // 레슨 강좌(피아노 등)는 course_dates/attendance가 아니라 lesson_attendance로 관리되므로
+    // 여기도 같은 방식으로 합산해준다 (attend_date에서 바로 연/월을 뽑아 쓸 수 있어 별도 join 불필요)
+    lessonAttendance.forEach(a => {
+      if (!a.is_attended) return;
+      const y = parseInt(a.attend_date.substring(0, 4), 10);
+      const m = parseInt(a.attend_date.substring(5, 7), 10);
+      const monthKey = `${y}-${m}`;
+      const monthEnd = new Date(monthBounds(y, m).end);
+      const member = memberMap.get(a.member_id);
+      if (!member) return;
+
+      if (member.gender === '남' || member.gender === '여') {
+        bump(a.course_id, monthKey, 'gender', member.gender, a.member_id);
+      }
+      const ageLabel = courseAgeGroup(calcAge(member.birth_date, monthEnd));
+      if (ageLabel) bump(a.course_id, monthKey, 'age', ageLabel, a.member_id);
+
+      const regionLabel = regionGroup(member);
+      if (regionLabel) bump(a.course_id, monthKey, 'region', regionLabel, a.member_id);
+    });
+
     function buildBuckets(getKey: (dim: DimKey, value: string) => string, realSource: Map<string, Set<number>>, attSource: Map<string, number>) {
       const out: Record<DimKey, Record<string, Bucket>> = { gender: {}, age: {}, region: {} };
       (Object.keys(DIM_INFO) as DimKey[]).forEach(dim => {
@@ -400,7 +465,7 @@ export default function CourseStatsClient() {
     });
 
     return result;
-  }, [courses, enrollments, courseDates, attendance, members, months]);
+  }, [courses, enrollments, courseDates, attendance, lessonAttendance, members, months]);
 
   // 상세통계에서 실제로 보여줄 컬럼(선택된 구분만)
   const detailColumns = useMemo(() => {
