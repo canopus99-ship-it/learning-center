@@ -352,10 +352,11 @@ export default function DatesClient({
       }}>
         <strong>💡 안내</strong>
         <ul style={{ margin: '6px 0 0', paddingLeft: 20, lineHeight: 1.6 }}>
-          <li><strong>휴강</strong>: 수업 자체는 남아있지만, 강사비 계산에서 제외됩니다</li>
-          <li><strong>보강</strong>: 정기 일정 외에 추가된 수업, 강사비 계산에 포함됩니다</li>
+          <li><strong>휴강</strong>: 수업 자체는 남아있지만 목록에 표시만 됩니다</li>
+          <li><strong>보강</strong>: 정기 일정 외에 추가된 수업입니다</li>
           <li><strong>삭제</strong>: 완전히 제거 (출석부에서도 사라짐)</li>
-          <li>강사가 출석체크한 날짜를 기준으로 강사비가 자동 계산됩니다 (다음 단계에서 구현)</li>
+          <li>강좌현황 통계·강사비는 이 날짜에 <strong>출석체크로 실제 출석한 인원이 1명 이상 있었는지</strong>를 기준으로 자동 계산됩니다.
+            휴강 표시를 깜빡해도 출석 기록이 없으면 자동으로 제외되니, 긴급 휴강 시 이 화면에서 굳이 일정을 지우지 않아도 됩니다.</li>
         </ul>
       </div>
     </div>
