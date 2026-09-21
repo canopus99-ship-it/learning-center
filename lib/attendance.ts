@@ -83,6 +83,58 @@ export function getAllowedCourseIds(staff: { role: string; allowed_course_ids: s
   return staff.allowed_course_ids.split(',').filter(Boolean).map(Number);
 }
 
+export type EnrollmentForPrint = {
+  id: number;
+  status: string;
+  end_date?: string | null;
+};
+
+export type PaymentForPrint = {
+  enrollment_id: number;
+  payment_year: number;
+  payment_month: number;
+  is_paid: boolean;
+  refund_date?: string | null;
+};
+
+/**
+ * 결재 출석부(인쇄용)에 표시할 수강생 명단을 걸러낸다.
+ * - 그 달에 결제완료(is_paid)된 회원만 표시
+ * - 환불된 결제도 환불일에 따라 그 달까지는 표시 (16일 이후 환불이면 그 달은 표시)
+ * - 종료(ended)된 회원은 종료일이 그 달 이후일 때만, 그 달 결제가 있으면 표시
+ * (app/attendance/[courseId]/CourseAttendanceClient.tsx의 인쇄용 명단 필터와 동일한 규칙 -
+ *  여러 강좌를 한번에 출력하는 app/attendance/print/AttendancePrintClient.tsx에서도 그대로 재사용)
+ */
+export function filterEnrollmentsForMonthlyPrint<E extends EnrollmentForPrint>(
+  enrollments: E[],
+  payments: PaymentForPrint[],
+  year: number,
+  month: number
+): E[] {
+  const monthStartStr = `${year}-${String(month).padStart(2, '0')}-01`;
+  return enrollments.filter(e => {
+    if (e.status === 'ended') {
+      if (!e.end_date) return false;
+      if (e.end_date <= monthStartStr) return false;
+      const hasPaidThisMonth = payments.some(p =>
+        p.enrollment_id === e.id && p.payment_year === year && p.payment_month === month && p.is_paid
+      );
+      return hasPaidThisMonth;
+    }
+    if (e.status === 'active' || e.status === 'paused') {
+      const thisMonthPayment = payments.find(p =>
+        p.enrollment_id === e.id && p.payment_year === year && p.payment_month === month && p.is_paid
+      );
+      if (!thisMonthPayment) return false;
+      if (thisMonthPayment.refund_date) {
+        if (thisMonthPayment.refund_date < monthStartStr) return false;
+      }
+      return true;
+    }
+    return false;
+  });
+}
+
 /**
  * 출석 통계: 특정 강좌의 특정 월 출석 현황
  */

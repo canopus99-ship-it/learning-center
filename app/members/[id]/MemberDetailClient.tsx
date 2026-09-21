@@ -173,6 +173,7 @@ export default function MemberDetailClient({
     refund_amount: number | null;
     transfer_to_year: number | null;
     transfer_to_month: number | null;
+    status_type: string | null;
     course_name: string;
   };
   const [payments, setPayments] = useState<PaymentHistory[]>([]);
@@ -192,6 +193,21 @@ export default function MemberDetailClient({
   const [levelChangeModalOpen, setLevelChangeModalOpen] = useState(false);
   const [levelChangeEnrollment, setLevelChangeEnrollment] = useState<Enrollment | null>(null);
   const [newLevelId, setNewLevelId] = useState('');
+
+  // 수강변경(다른 강좌/조로 이동) 모달
+  // - 기존 수강은 "수강 종료"로 기록을 보존하고, 선택한 새 강좌로 새로 수강신청하는 방식.
+  //   (기존 행의 course_id를 그 자리에서 바꾸면 과거 결제·출석 기록까지 새 강좌 소속으로
+  //    바뀌어버리므로, 반드시 종료 + 신규 등록 두 단계로 처리함)
+  const [changeCourseModalOpen, setChangeCourseModalOpen] = useState(false);
+  const [changingEnrollment, setChangingEnrollment] = useState<Enrollment | null>(null);
+  const [changeCourseQuery, setChangeCourseQuery] = useState('');
+  const [changeCourseResults, setChangeCourseResults] = useState<CourseSearchResult[]>([]);
+  const [changeCourseSearching, setChangeCourseSearching] = useState(false);
+  const [changeTargetLevels, setChangeTargetLevels] = useState<Map<number, number>>(new Map());
+  const [changeSaving, setChangeSaving] = useState(false);
+  // 이번 달 수강료를 새 강좌로 "대체"(자동 완납 처리)할지 여부 - 이월과 달리 대기명단 편입 없이
+  // 새 엔롤먼트에 0원짜리 결제 행을 만들어 완납 처리한다 (돈이 실제로 오간 게 아님을 명확히 구분)
+  const [changeTransferPayment, setChangeTransferPayment] = useState(true);
 
   // 승급 이력 (enrollment_id → 변경 기록 목록)
   const [levelHistory, setLevelHistory] = useState<Map<number, CourseLevelChangeRow[]>>(new Map());
@@ -550,6 +566,209 @@ export default function MemberDetailClient({
       alert(`${courseName}에 ${status === 'waiting' ? `대기 ${waitingOrder}순위로 등록` : '수강신청'}되었습니다!`);
       reloadEnrollments();
     }
+  }
+
+  // 수강변경 모달 열기 (당구/탁구처럼 조별로 나뉜 강좌에서 다른 조/강좌로 옮길 때 사용)
+  function openChangeCourseModal(e: Enrollment) {
+    setChangingEnrollment(e);
+    setChangeCourseQuery('');
+    setChangeCourseResults([]);
+    setChangeTargetLevels(new Map());
+    setChangeTransferPayment(true);
+    setChangeCourseModalOpen(true);
+  }
+
+  // 특정 수강(enrollment)의 "이번 달" 결제가 정상 완납되어 있는지 (환불/이월/대체 등 특수 상태 제외)
+  function getThisMonthPaidPayment(enrollmentId: number) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth() + 1;
+    return payments.find(p =>
+      p.enrollment_id === enrollmentId &&
+      p.payment_year === y &&
+      p.payment_month === m &&
+      p.is_paid &&
+      !p.status_type
+    ) || null;
+  }
+
+  async function handleSearchChangeCourse() {
+    if (!changeCourseQuery.trim()) { setChangeCourseResults([]); return; }
+    setChangeCourseSearching(true);
+    const { data, error } = await supabase
+      .from('courses')
+      .select('id, name, category, classroom, capacity, is_active, use_levels')
+      .ilike('name', `%${changeCourseQuery.trim()}%`)
+      .eq('is_active', true)
+      .limit(20);
+    if (error) {
+      console.error('강좌 검색 실패:', error);
+      setChangeCourseResults([]);
+    } else {
+      setChangeCourseResults(data || []);
+    }
+    setChangeCourseSearching(false);
+  }
+
+  // 수강변경 확정: 기존 수강은 "수강 종료"로 기록을 보존하고, 새 강좌로 새로 수강신청함
+  async function handleConfirmChangeCourse(target: CourseSearchResult) {
+    if (!changingEnrollment) return;
+    const oldEnrollment = changingEnrollment;
+    const oldCourseName = oldEnrollment.courses?.name || '기존 강좌';
+
+    if (target.id === oldEnrollment.course_id) {
+      alert('현재와 같은 강좌입니다.');
+      return;
+    }
+
+    // 등급 강좌면 등급 선택 필수
+    let targetLevelId: number | null = null;
+    if (target.use_levels) {
+      const sel = changeTargetLevels.get(target.id);
+      if (!sel) {
+        alert(`${target.name}은 등급별 수강료 강좌입니다. 등급을 먼저 선택해주세요.`);
+        return;
+      }
+      targetLevelId = sel;
+    }
+
+    // 이 회원이 그 강좌에 이미 등록(수강중/대기)되어 있는지 확인
+    const existingTarget = enrollments.find(x => x.course_id === target.id);
+    if (existingTarget && existingTarget.status !== 'ended') {
+      alert(`이미 "${target.name}"에 등록되어 있습니다 (${STATUS_LABELS[existingTarget.status]})`);
+      return;
+    }
+
+    // 이번 달 수강료를 이미 낸 상태에서 강좌를 바꾸는 경우, 체크박스가 켜져 있으면
+    // 새 강좌 쪽 이번 달 결제를 "대체"로 자동 완납 처리 (실제 돈이 오가는 건 아님)
+    const thisMonthPayment = getThisMonthPaidPayment(oldEnrollment.id);
+    const willTransferPayment = !!thisMonthPayment && changeTransferPayment;
+
+    const confirmMsg = willTransferPayment
+      ? (
+        `"${oldCourseName}"에서 "${target.name}"(으)로 수강을 변경하시겠습니까?\n\n` +
+        `- 기존 수강은 오늘 날짜로 종료 처리되어 결제·출석 기록이 그대로 보존됩니다.\n` +
+        `- "${target.name}"으로 새로 수강신청됩니다.\n` +
+        `- 이번 달(${thisMonthPayment!.payment_year}년 ${thisMonthPayment!.payment_month}월) 수강료는 이미 낸 것으로 처리되어, ` +
+        `새 강좌 쪽도 추가 납부 없이 자동으로 "완납(대체)" 처리됩니다.`
+      )
+      : (
+        `"${oldCourseName}"에서 "${target.name}"(으)로 수강을 변경하시겠습니까?\n\n` +
+        `- 기존 수강은 오늘 날짜로 종료 처리되어 결제·출석 기록이 그대로 보존됩니다.\n` +
+        `- "${target.name}"으로 새로 수강신청됩니다.\n` +
+        `- 이미 납부한 수강료는 자동으로 처리되지 않습니다. 필요하면 수납관리에서 환불·이월을 별도로 진행해주세요.`
+      );
+
+    if (!confirm(confirmMsg)) return;
+
+    setChangeSaving(true);
+
+    // 1) 기존 수강 종료 (기록 보존)
+    const { error: endErr } = await supabase.from('enrollments').update({
+      status: 'ended',
+      end_date: new Date().toISOString().split('T')[0],
+      end_reason: 'staff_action',
+      refund_memo: `수강변경 → ${target.name}`,
+      ended_at: new Date().toISOString(),
+    }).eq('id', oldEnrollment.id);
+
+    if (endErr) {
+      setChangeSaving(false);
+      alert('기존 수강 종료 처리 실패: ' + endErr.message);
+      return;
+    }
+
+    // 2) 새 강좌 정원 확인
+    const { data: targetEnrollments } = await supabase
+      .from('enrollments')
+      .select('id, status')
+      .eq('course_id', target.id);
+    const activeCount = (targetEnrollments || []).filter(x => x.status === 'active' || x.status === 'paused').length;
+    const waitingCount = (targetEnrollments || []).filter(x => x.status === 'waiting').length;
+    const isFull = activeCount >= target.capacity;
+    const newStatus = isFull ? 'waiting' : 'active';
+    const waitingOrder = newStatus === 'waiting' ? (waitingCount + 1) : null;
+
+    // 3) 새 강좌로 등록 (예전에 이 강좌를 수강종료했던 이력이 있으면 그 행을 재사용, 없으면 신규 생성)
+    let enrollErr = null;
+    let newEnrollmentId: number | null = null;
+    if (existingTarget && existingTarget.status === 'ended') {
+      const updateData: any = {
+        status: newStatus,
+        waiting_order: waitingOrder,
+        enrolled_at: new Date().toISOString(),
+        ended_at: null,
+        end_date: null,
+        end_reason: null,
+        refund_memo: null,
+        start_year: new Date().getFullYear(),
+        start_month: new Date().getMonth() + 1,
+      };
+      if (target.use_levels) updateData.course_level_id = targetLevelId;
+      const { error } = await supabase.from('enrollments').update(updateData).eq('id', existingTarget.id);
+      enrollErr = error;
+      if (!error) newEnrollmentId = existingTarget.id;
+    } else {
+      const insertData: any = {
+        member_id: member.id,
+        course_id: target.id,
+        status: newStatus,
+        waiting_order: waitingOrder,
+        enrolled_at: new Date().toISOString(),
+        start_year: new Date().getFullYear(),
+        start_month: new Date().getMonth() + 1,
+      };
+      if (target.use_levels) insertData.course_level_id = targetLevelId;
+      const { data, error } = await supabase.from('enrollments').insert([insertData]).select('id').single();
+      enrollErr = error;
+      if (!error && data) newEnrollmentId = data.id;
+    }
+
+    if (enrollErr) {
+      setChangeSaving(false);
+      alert(
+        `기존 수강은 종료됐지만, 새 강좌 등록에는 실패했습니다: ${enrollErr.message}\n` +
+        `"강좌 추가"에서 "${target.name}"을 다시 신청해주세요.`
+      );
+      setChangeCourseModalOpen(false);
+      setChangingEnrollment(null);
+      reloadEnrollments();
+      return;
+    }
+
+    // 4) 이번 달 수강료 "대체" 처리 (체크박스가 켜져 있고, 이번 달 결제가 실제로 있었던 경우만)
+    let transferWarning = '';
+    if (willTransferPayment && newEnrollmentId) {
+      const { error: transferErr } = await supabase.from('payments').upsert({
+        enrollment_id: newEnrollmentId,
+        payment_year: thisMonthPayment!.payment_year,
+        payment_month: thisMonthPayment!.payment_month,
+        amount: 0,
+        is_paid: true,
+        paid_at: new Date().toISOString(),
+        payment_method: null,
+        status_type: 'transferred',
+        memo: `수강변경 대체 (${oldCourseName} ${thisMonthPayment!.payment_year}년 ${thisMonthPayment!.payment_month}월분)`,
+        course_level_id: targetLevelId,
+      }, { onConflict: 'enrollment_id,payment_year,payment_month' });
+      if (transferErr) {
+        console.error('결제 대체 처리 실패:', transferErr);
+        transferWarning = `\n\n⚠ 다만 이번 달 결제 대체 처리에는 실패했습니다: ${transferErr.message}\n수납관리에서 직접 확인해주세요.`;
+      }
+    }
+
+    setChangeSaving(false);
+
+    alert(
+      `수강이 변경되었습니다.\n"${oldCourseName}" → "${target.name}"` +
+      (newStatus === 'waiting' ? `\n(정원이 가득 차 대기 ${waitingOrder}순위로 등록되었습니다)` : '') +
+      (willTransferPayment && !transferWarning ? `\n이번 달 수강료는 "대체" 처리되어 새 강좌도 완납 상태입니다.` : '') +
+      transferWarning
+    );
+    setChangeCourseModalOpen(false);
+    setChangingEnrollment(null);
+    reloadEnrollments();
+    loadPayments();
   }
 
   async function handleChangeEnrollmentStatus(e: Enrollment, newStatus: EnrollmentStatus) {
@@ -1036,6 +1255,15 @@ export default function MemberDetailClient({
                         🎓 등급변경
                       </button>
                     )}
+                    {e.status !== 'ended' && (
+                      <button
+                        onClick={() => openChangeCourseModal(e)}
+                        style={{ ...smallBtnStyle, color: '#185FA5' }}
+                        title="다른 강좌(조)로 수강을 변경합니다. 기존 기록은 보존되고 새로 등록됩니다."
+                      >
+                        🔄 수강변경
+                      </button>
+                    )}
                     <button onClick={() => handleDeleteEnrollment(e)} style={{ ...smallBtnStyle, color: '#A32D2D' }}>수강신청 취소</button>
                   </td>
                 </tr>
@@ -1377,6 +1605,186 @@ export default function MemberDetailClient({
                 🎓 등급 변경 저장
               </button>
               <button onClick={() => { setLevelChangeModalOpen(false); setLevelChangeEnrollment(null); }} style={secondaryBtnStyle}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================ */}
+      {/* 수강변경 모달 (다른 강좌/조로 이동)              */}
+      {/* ============================================ */}
+      {changeCourseModalOpen && changingEnrollment && (
+        <div style={modalOverlayStyle}>
+          <div style={modalContentStyle}>
+            <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>🔄 수강변경</h2>
+            <p style={{ fontSize: 13, color: '#666', margin: '0 0 4px' }}>
+              <strong>{member.name}</strong>
+            </p>
+            <p style={{ fontSize: 12, color: '#888', margin: '0 0 14px' }}>
+              현재: {changingEnrollment.courses?.name}
+              {changingEnrollment.courses?.use_levels && changingEnrollment.course_level_id && (() => {
+                const lv = allLevels.find(l => l.id === changingEnrollment.course_level_id);
+                return lv ? ` (${lv.level_name})` : '';
+              })()}
+            </p>
+
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <input
+                type="text"
+                value={changeCourseQuery}
+                onChange={(e) => setChangeCourseQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearchChangeCourse()}
+                placeholder="옮길 강좌명 입력 (예: 당구교실)"
+                style={{ flex: 1, ...inputStyle }}
+              />
+              <button onClick={handleSearchChangeCourse} style={primaryBtnStyle}>검색</button>
+            </div>
+
+            {changeCourseSearching ? (
+              <p style={{ fontSize: 13, color: '#888' }}>검색 중...</p>
+            ) : changeCourseResults.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
+                {changeCourseResults.map((c) => {
+                  const isSameCourse = c.id === changingEnrollment.course_id;
+                  const courseLevels = allLevels.filter(lv => lv.course_id === c.id);
+                  const isLevelCourse = !!c.use_levels;
+                  const selectedLevelId = changeTargetLevels.get(c.id);
+                  return (
+                    <div key={c.id} style={{
+                      padding: 10, background: 'white', borderRadius: 6, border: '1px solid #eee',
+                      opacity: isSameCourse ? 0.5 : 1,
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <strong style={{ fontSize: 14 }}>{c.name}</strong>
+                          <span style={{ ...badgeStyle(COURSE_CATEGORY_COLORS[c.category] || '#666'), marginLeft: 8 }}>{c.category}</span>
+                          {isLevelCourse && (
+                            <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, background: '#7B3FBF', color: 'white', marginLeft: 6 }}>
+                              📊 등급별
+                            </span>
+                          )}
+                          <span style={{ fontSize: 12, color: '#666', marginLeft: 8 }}>{c.classroom || '-'} · 정원 {c.capacity}명</span>
+                        </div>
+                        {isSameCourse ? (
+                          <span style={{ fontSize: 12, color: '#888' }}>현재 수강중인 강좌</span>
+                        ) : (
+                          <button
+                            onClick={() => handleConfirmChangeCourse(c)}
+                            disabled={changeSaving || (isLevelCourse && !selectedLevelId)}
+                            style={{
+                              padding: '6px 14px',
+                              background: (changeSaving || (isLevelCourse && !selectedLevelId)) ? '#ccc' : '#185FA5',
+                              color: 'white',
+                              border: 'none', borderRadius: 4,
+                              cursor: (changeSaving || (isLevelCourse && !selectedLevelId)) ? 'not-allowed' : 'pointer',
+                              fontSize: 12,
+                            }}
+                          >
+                            {changeSaving ? '처리 중...' : '이 강좌로 변경'}
+                          </button>
+                        )}
+                      </div>
+
+                      {isLevelCourse && !isSameCourse && (
+                        <div style={{
+                          marginTop: 8, padding: 8,
+                          background: courseLevels.length === 0 ? '#FFF5F5' : '#F8F4FF',
+                          borderRadius: 6,
+                        }}>
+                          {courseLevels.length === 0 ? (
+                            <p style={{ fontSize: 11, color: '#A32D2D', margin: 0 }}>
+                              ⚠ 이 강좌의 등급이 등록되지 않았습니다. 강좌 관리에서 먼저 등록하세요.
+                            </p>
+                          ) : (
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                              <span style={{ fontSize: 11, color: '#7B3FBF', marginRight: 4 }}>등급:</span>
+                              {courseLevels.map(lv => (
+                                <label
+                                  key={lv.id}
+                                  style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: 3,
+                                    padding: '4px 8px', borderRadius: 4, cursor: 'pointer',
+                                    background: selectedLevelId === lv.id ? '#7B3FBF' : 'white',
+                                    color: selectedLevelId === lv.id ? 'white' : '#333',
+                                    border: '1px solid ' + (selectedLevelId === lv.id ? '#7B3FBF' : '#ddd'),
+                                    fontSize: 11,
+                                  }}
+                                >
+                                  <input
+                                    type="radio"
+                                    name={`change_level_${c.id}`}
+                                    checked={selectedLevelId === lv.id}
+                                    onChange={() => {
+                                      const next = new Map(changeTargetLevels);
+                                      next.set(c.id, lv.id);
+                                      setChangeTargetLevels(next);
+                                    }}
+                                    style={{ display: 'none' }}
+                                  />
+                                  <strong>{lv.level_name}</strong>
+                                  <span style={{ fontSize: 10, opacity: 0.85 }}>
+                                    ({lv.fee_jung_gu.toLocaleString()}/{lv.fee_other.toLocaleString()})
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : changeCourseQuery && !changeCourseSearching ? (
+              <p style={{ fontSize: 13, color: '#888' }}>검색 결과가 없습니다.</p>
+            ) : null}
+
+            <div style={{
+              background: '#FFF8E1', border: '1px solid #FFE082',
+              padding: 10, borderRadius: 6, fontSize: 11, color: '#5D4037', margin: '16px 0',
+            }}>
+              💡 변경하면 기존 강좌는 오늘 날짜로 수강 종료 처리되어 결제·출석 기록이 그대로 보존되고,
+              선택한 강좌로 새로 수강신청됩니다.
+            </div>
+
+            {(() => {
+              const thisMonthPayment = getThisMonthPaidPayment(changingEnrollment.id);
+              if (!thisMonthPayment) {
+                return (
+                  <div style={{
+                    background: '#FCEBEB', border: '1px solid #F09595',
+                    padding: 10, borderRadius: 6, fontSize: 11, color: '#742020', marginBottom: 16,
+                  }}>
+                    ⚠ 이번 달 수강료가 확인되지 않습니다. 이미 낸 수강료는 자동으로 처리되지 않으니
+                    필요하면 수납관리에서 환불·이월을 별도로 진행해주세요.
+                  </div>
+                );
+              }
+              return (
+                <label style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8,
+                  background: '#E6F1FB', border: '1px solid #B5D4F4',
+                  padding: 10, borderRadius: 6, fontSize: 12, color: '#042C53', marginBottom: 16,
+                  cursor: 'pointer',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={changeTransferPayment}
+                    onChange={(e) => setChangeTransferPayment(e.target.checked)}
+                    style={{ marginTop: 2 }}
+                  />
+                  <span>
+                    💰 이번 달({thisMonthPayment.payment_year}년 {thisMonthPayment.payment_month}월) 수강료
+                    ({thisMonthPayment.amount.toLocaleString()}원)가 "{changingEnrollment.courses?.name}"으로 결제 완료되어 있습니다.<br />
+                    체크하면 새 강좌도 <strong>추가 납부 없이 이번 달 "대체" 처리</strong>됩니다 (수납관리엔 "대체"로 별도 표시).
+                    체크 해제 시 새 강좌는 미납 상태로 남으며, 필요하면 수납관리에서 직접 처리해주세요.
+                  </span>
+                </label>
+              );
+            })()}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={() => { setChangeCourseModalOpen(false); setChangingEnrollment(null); }} style={secondaryBtnStyle}>닫기</button>
             </div>
           </div>
         </div>

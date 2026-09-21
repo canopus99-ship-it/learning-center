@@ -13,6 +13,17 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   zeropay: '제로페이',
 };
 
+// payments.status_type 값들 (환불/이월과 별개 축, 추가 가능)
+// - refunded: 환불 처리됨
+// - carryover: 이월 처리됨 (대기명단으로 편입)
+// - transferred: 수강변경으로 인한 대체 처리 (실제 결제 없이 이전 강좌 납부분을 인정)
+export type PaymentStatusType = 'refunded' | 'carryover' | 'transferred';
+export const PAYMENT_STATUS_TYPE_LABELS: Record<PaymentStatusType, string> = {
+  refunded: '환불',
+  carryover: '이월',
+  transferred: '대체',
+};
+
 // 옛 DB 값('unregistered', 'refund', 'other')도 호환되도록 string 키 허용
 export const END_REASON_LABELS: Record<string, string> = {
   self_request: '본인 요청',

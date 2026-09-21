@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
-import { canCheckAttendance, calculateMonthlyAttendance } from '@/lib/attendance';
+import { canCheckAttendance, calculateMonthlyAttendance, filterEnrollmentsForMonthlyPrint } from '@/lib/attendance';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { AttendancePrintPage, chunk } from '@/components/AttendancePrintPage';
 
 type Course = {
   id: number;
@@ -141,47 +142,7 @@ export default function CourseAttendanceClient({
   //   3. 종료된 회원(ended)은 종료일이 속한 월까지만 표시
   //      - 종료일 다음날부터 출석 차단
   //   4. paused(일시중지)는 결제 있으면 표시
-  const allEnrollments = enrollments.filter(e => {
-    const monthStartStr = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
-
-    // 종료된 회원: 종료일이 선택 월 첫째날보다 이후일 때만 표시
-    //   - 종료일이 6/1이면 6월 출석부에는 안 보임 (6/1 ≤ 6/1)
-    //   - 종료일이 5/20이면 5월 출석부에는 보임 (5/20 > 5/1)
-    if (e.status === 'ended') {
-      if (!e.end_date) return false;
-      if (e.end_date <= monthStartStr) return false; // 종료일 ≤ 월 첫째날 → 제외
-      // 그 월에 결제 있어야 표시
-      const hasPaidThisMonth = payments.some(p =>
-        p.enrollment_id === e.id &&
-        p.payment_year === selectedYear &&
-        p.payment_month === selectedMonth &&
-        p.is_paid
-      );
-      return hasPaidThisMonth;
-    }
-
-    // active 또는 paused: 그 월에 결제된 경우만 표시
-    if (e.status === 'active' || e.status === 'paused') {
-      const thisMonthPayment = payments.find(p =>
-        p.enrollment_id === e.id &&
-        p.payment_year === selectedYear &&
-        p.payment_month === selectedMonth &&
-        p.is_paid
-      );
-      if (!thisMonthPayment) return false;
-
-      // 환불된 결제: 환불일이 이번 달이 아니라 더 이전 달이면 제외
-      // (환불일이 이번 달이거나, 환불 안 됐거나, 환불일이 미래면 표시)
-      if (thisMonthPayment.refund_date) {
-        const refundDate = thisMonthPayment.refund_date;
-        // 환불일이 이번 달 첫째날보다 이전 → 이미 환불된 다음 달부터 제외
-        if (refundDate < monthStartStr) return false;
-      }
-      return true;
-    }
-
-    return false;
-  });
+  const allEnrollments = filterEnrollmentsForMonthlyPrint(enrollments, payments, selectedYear, selectedMonth);
 
   const filteredEnrollments = allEnrollments
     .filter(e => {
@@ -549,7 +510,8 @@ function PrintableAttendance({
 }) {
   // 이미 상위에서 필터된 enrollments를 받음 (출석부 화면과 동일한 명단)
   const printableEnrollments = [...enrollments]
-    .sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || ''));
+    .sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || ''))
+    .map(e => ({ id: e.id, memberName: e.members?.name || '' }));
 
   // 양식: 10일치씩, 20명씩 한 페이지
   const datesPerPage = 10;
@@ -559,17 +521,29 @@ function PrintableAttendance({
   const datePages = chunk(dates, datesPerPage);
   const totalPages = Math.max(1, Math.ceil(printableEnrollments.length / studentsPerPage));
 
+  // 15명/10일 칸으로 맞추기 (빈 칸은 null로 채움 - AttendancePrintPage가 빈 칸을 그려줌)
+  function padStudents(list: typeof printableEnrollments) {
+    const padded: (typeof printableEnrollments[number] | null)[] = [...list];
+    while (padded.length < studentsPerPage) padded.push(null);
+    return padded;
+  }
+  function padDates(list: CourseDate[]) {
+    const padded: (CourseDate | null)[] = [...list];
+    while (padded.length < datesPerPage) padded.push(null);
+    return padded;
+  }
+
   return (
     <div className="print-only" style={{ display: 'none' }}>
       {datePages.length === 0 ? (
         // 수업 날짜가 없어도 빈 양식 1장 출력
-        <PrintPage
-          course={course}
+        <AttendancePrintPage
+          courseName={course.name}
           instructorName={instructorName}
           year={year}
           month={month}
-          dates={[]}
-          enrollments={printableEnrollments.slice(0, studentsPerPage)}
+          dates={padDates([])}
+          enrollments={padStudents(printableEnrollments.slice(0, studentsPerPage))}
           attendance={attendance}
           pageNum={1}
           totalPages={1}
@@ -579,14 +553,14 @@ function PrintableAttendance({
           Array.from({ length: totalPages }).map((_, spIdx) => {
             const students = printableEnrollments.slice(spIdx * studentsPerPage, (spIdx + 1) * studentsPerPage);
             return (
-              <PrintPage
+              <AttendancePrintPage
                 key={`${dpIdx}-${spIdx}`}
-                course={course}
+                courseName={course.name}
                 instructorName={instructorName}
                 year={year}
                 month={month}
-                dates={datePage}
-                enrollments={students}
+                dates={padDates(datePage)}
+                enrollments={padStudents(students)}
                 attendance={attendance}
                 pageNum={dpIdx * totalPages + spIdx + 1}
                 totalPages={datePages.length * totalPages}
@@ -595,150 +569,6 @@ function PrintableAttendance({
           })
         )
       )}
-    </div>
-  );
-}
-
-function PrintPage({
-  course,
-  instructorName,
-  year,
-  month,
-  dates,
-  enrollments,
-  attendance,
-  pageNum,
-  totalPages,
-}: {
-  course: Course;
-  instructorName: string;
-  year: number;
-  month: number;
-  dates: CourseDate[];
-  enrollments: Enrollment[];
-  attendance: Attendance[];
-  pageNum: number;
-  totalPages: number;
-}) {
-  // 10칸으로 맞추기 (빈 칸 채우기)
-  const dateColumns = [...dates];
-  while (dateColumns.length < 10) {
-    dateColumns.push(null as any);
-  }
-
-  // 15명으로 맞추기 (빈 행 채우기)
-  const studentRows = [...enrollments];
-  while (studentRows.length < 15) {
-    studentRows.push(null as any);
-  }
-
-  function getAttendanceMark(enrollmentId: number, courseDateId: number): string {
-    const a = attendance.find(at => at.enrollment_id === enrollmentId && at.course_date_id === courseDateId);
-    return a ? '○' : '';
-  }
-
-  function getDailyTotal(courseDateId: number): number {
-    return attendance.filter(a => a.course_date_id === courseDateId && a.is_present).length;
-  }
-
-  return (
-    <div className="print-page" style={{
-      pageBreakAfter: 'always',
-      padding: '8px 24px',
-      fontFamily: 'sans-serif',
-      color: '#000',
-      background: 'white',
-    }}>
-      {/* 상단 헤더 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-        <div style={{ flex: 1 }}></div>
-        <div style={{ flex: 2, textAlign: 'center' }}>
-          <h1 style={{ fontSize: 18, margin: 0, fontWeight: 'bold' }}>
-            {year}년 중림종합사회복지관
-          </h1>
-          <h1 style={{ fontSize: 18, margin: '4px 0 0', fontWeight: 'bold' }}>
-            늘품학습센터 출석부
-          </h1>
-        </div>
-        {/* 결재란 */}
-        <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
-          <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
-            <tbody>
-              <tr>
-                <td rowSpan={2} style={{ border: '1px solid black', padding: '4px 6px', textAlign: 'center', width: 20, writingMode: 'vertical-rl', verticalAlign: 'middle' }}>결재</td>
-                <td style={{ border: '1px solid black', padding: '4px 12px', textAlign: 'center', width: 50 }}>담 당</td>
-                <td style={{ border: '1px solid black', padding: '4px 12px', textAlign: 'center', width: 50 }}>과 장</td>
-              </tr>
-              <tr>
-                <td style={{ border: '1px solid black', padding: '4px 12px', height: 30 }}></td>
-                <td style={{ border: '1px solid black', padding: '4px 12px', height: 30, fontSize: 10, textAlign: 'center' }}>전결</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* 강좌명 / 강사명 */}
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16, fontSize: 12 }}>
-        <tbody>
-          <tr>
-            <td style={{ border: '1px solid black', padding: '6px 10px', background: '#e0e0e0', width: 80, textAlign: 'center' }}>강좌명</td>
-            <td style={{ border: '1px solid black', padding: '6px 10px', width: '40%' }}>{course.name}</td>
-            <td style={{ border: '1px solid black', padding: '6px 10px', background: '#e0e0e0', width: 80, textAlign: 'center' }}>강사명</td>
-            <td style={{ border: '1px solid black', padding: '6px 10px' }}>{instructorName}</td>
-          </tr>
-        </tbody>
-      </table>
-
-      {/* 출석부 본체 */}
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-        <thead>
-          <tr>
-            <th style={{ border: '1px solid black', padding: 4, width: 40, background: '#e0e0e0' }}>연번</th>
-            <th style={{ border: '1px solid black', padding: 4, width: 90, background: '#e0e0e0' }}>성명</th>
-            {dateColumns.map((d, idx) => (
-              <th key={idx} style={{ border: '1px solid black', padding: 4, background: '#e0e0e0', minWidth: 40 }}>
-                {idx + 1}
-                <div style={{ fontSize: 9, marginTop: 2 }}>
-                  {d ? `${parseInt(d.class_date.substring(5, 7))}/${parseInt(d.class_date.substring(8, 10))}` : '/'}
-                </div>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {studentRows.map((e, idx) => (
-            <tr key={idx}>
-              <td style={{ border: '1px solid black', padding: 4, textAlign: 'center', height: 24 }}>{idx + 1}</td>
-              <td style={{ border: '1px solid black', padding: 4 }}>{e?.members?.name || ''}</td>
-              {dateColumns.map((d, didx) => (
-                <td key={didx} style={{ border: '1px solid black', padding: 4, textAlign: 'center' }}>
-                  {e && d ? getAttendanceMark(e.id, d.id) : ''}
-                </td>
-              ))}
-            </tr>
-          ))}
-          {/* 일계 */}
-          <tr>
-            <td colSpan={2} style={{ border: '1px solid black', padding: 4, textAlign: 'center', background: '#e0e0e0', fontWeight: 'bold' }}>일계</td>
-            {dateColumns.map((d, didx) => (
-              <td key={didx} style={{ border: '1px solid black', padding: 4, textAlign: 'center', background: '#f8f8f8' }}>
-                {d ? getDailyTotal(d.id) : ''}
-              </td>
-            ))}
-          </tr>
-        </tbody>
-      </table>
-
-      {/* 하단 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, fontSize: 11 }}>
-        <span>계속( {pageNum} / {totalPages} )</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#333' }}>
-          <span style={{ fontSize: 10 }}>중구 구립·대한불교조계종사회복지재단 운영</span>
-          <strong style={{ fontSize: 13, color: '#d97506' }}>중림종합사회복지관</strong>
-        </div>
-      </div>
-
       <style>{`
         @media print {
           @page {
@@ -755,15 +585,6 @@ function PrintPage({
       `}</style>
     </div>
   );
-}
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  if (arr.length === 0) return [];
-  const result: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    result.push(arr.slice(i, i + size));
-  }
-  return result;
 }
 
 function SummaryBox({ label, value, color }: { label: string; value: string; color: string }) {

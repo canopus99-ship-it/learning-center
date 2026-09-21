@@ -1488,6 +1488,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     bgColor = '#7B3FBF';
                                     textColor = 'white';
                                     canSelect = true;
+                                  } else if (thisMonthStatus === 'transferred') {
+                                    // 다른 강좌에서 수강변경으로 대체 처리된 달 (실제 결제 없음, 셀 색 파랑)
+                                    label = '대체';
+                                    bgColor = '#185FA5';
+                                    textColor = 'white';
+                                    canSelect = true;
                                   } else if (isAfterRefundCarryover && !isPaid) {
                                     // 환불/이월한 달의 다음 달부터 = 미등록 (수강종료 아님)
                                     label = isOTMonth ? '미등록 (OT)' : '미등록';
@@ -2245,7 +2251,35 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
               </div>
             )}
 
-            {editingPayment.existing && !(editingPayment.existing.status_type === 'refunded' || editingPayment.existing.status_type === 'carryover') && (
+            {editingPayment.existing && editingPayment.existing.status_type === 'transferred' && (
+              <div style={{
+                marginTop: 12, padding: 12,
+                background: '#E6F1FB', border: '1px solid #B5D4F4',
+                borderRadius: 6, fontSize: 12, color: '#042C53',
+              }}>
+                <div>
+                  <strong>🔄 수강변경 대체 처리됨</strong><br />
+                  실제 결제는 없으며, 수강변경 전 강좌의 이번 달 납부분을 인정 처리한 항목입니다.
+                  {editingPayment.existing.memo && <><br />메모: {editingPayment.existing.memo}</>}
+                </div>
+                <button
+                  onClick={() => {
+                    if (confirm('이 대체 처리를 해제하시겠습니까?\n(0원 결제완료 상태로 남으며, 필요하면 금액을 직접 수정할 수 있습니다)')) {
+                      clearRefundCarryover(editingPayment.existing!.id);
+                      setPaymentModalOpen(false);
+                    }
+                  }}
+                  style={{
+                    marginTop: 8, padding: '6px 12px',
+                    background: 'white', color: '#042C53',
+                    border: '1px solid #B5D4F4', borderRadius: 4,
+                    cursor: 'pointer', fontSize: 12,
+                  }}
+                >대체 처리 해제</button>
+              </div>
+            )}
+
+            {editingPayment.existing && !editingPayment.existing.status_type && (
               <div style={{
                 marginTop: 12, padding: 10,
                 background: '#FCEBEB', border: '1px solid #F09595',

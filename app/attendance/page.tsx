@@ -100,9 +100,28 @@ export default async function AttendancePage() {
           <Link href="/" style={{ color: '#666', fontSize: 13, textDecoration: 'none' }}>← 홈으로</Link>
         )}
         <h1 style={{ fontSize: 22, marginTop: 12, marginBottom: 8 }}>✅ 출석부</h1>
-        <p style={{ color: '#666', fontSize: 14, marginBottom: 24 }}>
+        <p style={{ color: '#666', fontSize: 14, marginBottom: staff.role === 'tablet' ? 24 : 16 }}>
           {staff.role === 'tablet' ? '강좌를 선택하여 출석체크하세요.' : '강좌별 출석부를 관리하고 PDF로 출력할 수 있습니다.'}
         </p>
+
+        {staff.role !== 'tablet' && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+            <div style={{
+              padding: '8px 18px', borderRadius: 6, fontSize: 13, fontWeight: 600,
+              background: '#185FA5', color: 'white', border: '1px solid #185FA5',
+            }}>
+              📋 출석부
+            </div>
+            <Link href="/attendance/print" style={{ textDecoration: 'none' }}>
+              <div style={{
+                padding: '8px 18px', borderRadius: 6, fontSize: 13,
+                background: 'white', color: '#333', border: '1px solid #ddd',
+              }}>
+                🖨️ 출석부 출력
+              </div>
+            </Link>
+          </div>
+        )}
 
         {/* 오늘의 수업 */}
         {todayDates.length > 0 && (
