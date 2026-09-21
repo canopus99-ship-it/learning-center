@@ -213,9 +213,7 @@ export default function CourseStatsClient() {
   );
 
   // 강좌별, 월별 통계 계산 (출석부 기반)
-  // - 강의횟수: 그 달의 course_dates 중 "출석인원이 1명 이상 있었던" 날짜만 카운트
-  //   (휴강 여부(is_cancelled) 플래그가 아니라 실제 출석 기록 유무로 판정.
-  //    긴급 휴강 등으로 담당자가 일정을 미처 지우지 못해도, 출석체크가 없으면 자동으로 빠짐)
+  // - 강의횟수: 그 달의 course_dates 중 휴강 제외
   // - 실인원: 그 달에 출석한 적이 있는 회원 수 (member_id 중복 제거)
   // - 신규인원: 그 달 실인원 중 "전월 실인원"에 없던 사람
   // - 연인원: 그 달의 출석체크 수 합계
@@ -237,14 +235,11 @@ export default function CourseStatsClient() {
     const attendedMembers = new Map<string, Set<number>>();
     // 강좌+월별 출석 횟수 합계 (연인원)
     const attendanceCounts = new Map<string, number>();
-    // 출석 기록(is_present=true)이 1건이라도 있는 course_date_id 집합 (강의횟수 판정용)
-    const datesWithAttendance = new Set<number>();
 
     attendance.forEach(a => {
       if (!a.is_present) return;
       const info = dateToInfo.get(a.course_date_id);
       if (!info) return;
-      datesWithAttendance.add(a.course_date_id);
       const memberId = enrollToMember.get(a.enrollment_id);
       if (!memberId) return;
       const key = `${info.courseId}-${info.key}`;
@@ -810,7 +805,7 @@ export default function CourseStatsClient() {
         }}>
           <strong>💡 용어 안내 (출석부 기반)</strong>
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-            <li><strong>강의 횟수</strong>: 해당 월 수업 날짜 중 출석인원이 1명 이상 있었던 실제 진행 횟수 (휴강 표시 여부와 무관하게, 출석 기록이 없는 날은 자동 제외)</li>
+            <li><strong>강의 횟수</strong>: 해당 월에 진행한 실제 수업 횟수 (휴강 제외)</li>
             <li><strong>실인원</strong>: 해당 월 출석부에 등록된 회원 수 (한 번이라도 출석한 사람, 중복 제거)</li>
             <li><strong>신규인원</strong>: 실인원 중 전월 출석부에 없던 사람</li>
             <li><strong>연인원</strong>: 해당 월 출석 횟수의 총합</li>

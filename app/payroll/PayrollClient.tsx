@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
-import { fetchAllRows } from '@/lib/fetchAll';
 import * as XLSX from 'xlsx';
 
 type Course = {
@@ -36,11 +35,6 @@ type CourseDate = {
   end_time: string | null;
   is_cancelled: boolean;
   is_makeup: boolean;
-};
-
-type AttendanceRow = {
-  course_date_id: number;
-  is_present: boolean;
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -89,7 +83,6 @@ export default function PayrollClient() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [instructors, setInstructors] = useState<Instructor[]>([]);
   const [courseDates, setCourseDates] = useState<CourseDate[]>([]);
-  const [attendance, setAttendance] = useState<AttendanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCourseIds, setSelectedCourseIds] = useState<Set<number>>(new Set());
 
@@ -112,63 +105,30 @@ export default function PayrollClient() {
       supabase.from('course_dates').select('*').gte('class_date', monthStart).lt('class_date', monthEnd).order('class_date'),
     ]);
 
-    const dates = (dRes.data || []) as CourseDate[];
-    const dateIds = dates.map(d => d.id);
-    let attRows: AttendanceRow[] = [];
-    if (dateIds.length > 0) {
-      // in 절 크기 제한 대응 (500개씩 나눠서 조회)
-      for (let i = 0; i < dateIds.length; i += 500) {
-        const chunk = dateIds.slice(i, i + 500);
-        const { data } = await fetchAllRows<AttendanceRow>((from, to) =>
-          supabase
-            .from('attendance')
-            .select('course_date_id, is_present')
-            .in('course_date_id', chunk)
-            .eq('is_present', true)
-            .range(from, to)
-        );
-        attRows = attRows.concat(data);
-      }
-    }
-
     setCourses(cRes.data || []);
     setInstructors(iRes.data || []);
-    setCourseDates(dates);
-    setAttendance(attRows);
+    setCourseDates(dRes.data || []);
     setLoading(false);
   }
 
-  // 출석 기록(is_present=true)이 1건이라도 있는 course_date_id 집합
-  // (attendance는 이미 is_present=true만 불러온 상태)
-  const datesWithAttendance = new Set(attendance.map(a => a.course_date_id));
-
-  const todayStr = today.toISOString().split('T')[0];
-
   // 강사 인자를 받아서 계산 (주/보조 강사 공통)
-  // - 강의 횟수(sessions) = "출석인원이 1명이라도 있었던" 날짜 수 (is_cancelled 플래그가 아니라
-  //   실제 출석기록 유무로 판정. 긴급 휴강으로 일정을 못 지웠어도 출석체크가 없으면 자동 제외됨)
   function calcPay(course: Course, instructor: Instructor | null) {
     const allDates = courseDates.filter(d => d.course_id === course.id);
-    const activeDates = allDates.filter(d => datesWithAttendance.has(d.id));
+    const activeDates = allDates.filter(d => !d.is_cancelled);
     const sessions = activeDates.length;
     const cancelledCount = allDates.length - activeDates.length;
-    // 이미 지난 날짜인데(휴강 표시도 안 돼있고) 출석 기록이 없는 경우 = 출석체크를 깜빡했을 가능성
-    // (미래 날짜는 아직 출석체크를 안 한 게 당연하므로 제외)
-    const missingAttendanceCount = allDates.filter(d =>
-      !d.is_cancelled && d.class_date <= todayStr && !datesWithAttendance.has(d.id)
-    ).length;
 
     if (!instructor || sessions === 0) {
-      return { instructor, sessions, cancelledCount, missingAttendanceCount, totalHours: 0, amount: 0, activeDates };
+      return { instructor, sessions, cancelledCount, totalHours: 0, amount: 0, activeDates };
     }
 
     if (instructor.pay_type === 'hourly') {
       const totalHours = instructor.class_hours * sessions;
       const amount = Math.round(instructor.pay_amount * totalHours);
-      return { instructor, sessions, cancelledCount, missingAttendanceCount, totalHours, amount, activeDates };
+      return { instructor, sessions, cancelledCount, totalHours, amount, activeDates };
     } else {
       const amount = instructor.pay_amount * sessions;
-      return { instructor, sessions, cancelledCount, missingAttendanceCount, totalHours: 0, amount, activeDates };
+      return { instructor, sessions, cancelledCount, totalHours: 0, amount, activeDates };
     }
   }
 
@@ -400,7 +360,7 @@ export default function PayrollClient() {
     <div style={{ maxWidth: 1100, margin: '40px auto', padding: 20 }}>
       <h1 style={{ fontSize: 22, marginBottom: 8 }}>💵 강사비</h1>
       <p style={{ color: '#666', marginBottom: 20, fontSize: 13 }}>
-        실제 출석 기록이 있는 수업 날짜만 강의 횟수로 자동 계산됩니다. (출석인원 0명인 날은 휴강 표시 여부와 무관하게 제외)
+        출석부 등록된 수업 날짜를 기준으로 자동 계산됩니다. (휴강 제외)
       </p>
 
       <div style={{
@@ -502,7 +462,6 @@ export default function PayrollClient() {
             const sample = calcPay(course, courseInstructors[0]?.instructor || null);
             const sessions = sample.sessions;
             const cancelledCount = sample.cancelledCount;
-            const missingAttendanceCount = sample.missingAttendanceCount;
             const courseTotalAmount = courseInstructors.reduce((s, item) => s + calcPay(course, item.instructor).amount, 0);
             const courseTotalNet = courseInstructors.reduce((s, item) => s + calcTax(calcPay(course, item.instructor).amount).netPay, 0);
             return (
@@ -543,20 +502,9 @@ export default function PayrollClient() {
                         <span style={{ fontSize: 12, color: '#888' }}>
                           · 수업 {sessions}회
                           {cancelledCount > 0 && (
-                            <span style={{ marginLeft: 4, color: '#A32D2D' }}>(제외 {cancelledCount}일)</span>
+                            <span style={{ marginLeft: 4, color: '#A32D2D' }}>(휴강 {cancelledCount})</span>
                           )}
                         </span>
-                        {missingAttendanceCount > 0 && (
-                          <span
-                            style={{
-                              fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                              background: '#FFF3E0', color: '#BA7517', border: '1px solid #F0C088',
-                            }}
-                            title="일정은 있고 휴강 표시도 안 돼 있는데 출석 기록이 없는 날입니다. 출석체크를 깜빡했을 수 있으니 출석부를 확인해주세요."
-                          >
-                            ⚠ 출석체크 확인 필요 {missingAttendanceCount}일
-                          </span>
-                        )}
                       </div>
                       {/* 강사별 1줄씩 */}
                       {courseInstructors.map(({ instructor, role }) => {
@@ -631,8 +579,7 @@ export default function PayrollClient() {
               <li>강좌를 선택(체크)한 후 엑셀 다운로드를 누르면 강사료 지급 조서가 생성됩니다</li>
               <li>엑셀에는 <strong>총괄 시트 + 강좌별 시트</strong>가 자동 생성됩니다</li>
               <li>시급: 단가 × 1회당 시간 × 수업 횟수 / 일급: 단가 × 수업 횟수</li>
-              <li>실제 출석 기록(1명 이상)이 있는 수업만 강의 횟수에 포함됩니다 (휴강 표시를 깜빡해도 출석이 없으면 자동 제외, 보강은 출석이 있으면 포함)</li>
-              <li>⚠ 표시가 뜨면 일정은 있는데 출석 기록이 없는 지난 날짜가 있다는 뜻입니다 - 출석체크 누락인지 실제 휴강인지 출석부에서 확인 후 강사료를 확정해주세요</li>
+              <li>휴강된 수업은 제외, 보강은 포함됩니다</li>
               <li>원천징수 3.3% 자동 공제 (10원 단위 절사)</li>
               <li>강좌에 주강사/보조강사가 있으면 각각 자동 계산됩니다 (각자 단가 기준)</li>
               <li>인센티브 등 추가 정보는 엑셀에서 수기로 보정해주세요</li>
