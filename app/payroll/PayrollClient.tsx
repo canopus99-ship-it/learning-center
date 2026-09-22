@@ -14,6 +14,7 @@ type Course = {
   sub_instructor_id: number | null;
   is_active: boolean;
   operation_months: string | null;
+  is_lesson?: boolean;
 };
 
 type Instructor = {
@@ -41,6 +42,14 @@ type CourseDate = {
 type AttendanceRow = {
   course_date_id: number;
   is_present: boolean;
+};
+
+// 레슨 강좌(피아노 등, is_lesson=true)는 course_dates/attendance가 아니라
+// 개인별 스케줄 + lesson_attendance 테이블로 출석을 관리한다 (통계 화면과 동일한 구조).
+type LessonAttendanceRow = {
+  course_id: number;
+  attend_date: string;
+  is_attended: boolean;
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -90,6 +99,7 @@ export default function PayrollClient() {
   const [instructors, setInstructors] = useState<Instructor[]>([]);
   const [courseDates, setCourseDates] = useState<CourseDate[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRow[]>([]);
+  const [lessonAttendance, setLessonAttendance] = useState<LessonAttendanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCourseIds, setSelectedCourseIds] = useState<Set<number>>(new Set());
 
@@ -131,10 +141,22 @@ export default function PayrollClient() {
       }
     }
 
+    // 레슨 강좌(피아노 등)는 course_dates/attendance에 안 잡히므로 lesson_attendance를 따로 조회
+    const { data: laData } = await fetchAllRows<LessonAttendanceRow>((from, to) =>
+      supabase
+        .from('lesson_attendance')
+        .select('course_id, attend_date, is_attended')
+        .eq('is_attended', true)
+        .gte('attend_date', monthStart)
+        .lt('attend_date', monthEnd)
+        .range(from, to)
+    );
+
     setCourses(cRes.data || []);
     setInstructors(iRes.data || []);
     setCourseDates(dates);
     setAttendance(attRows);
+    setLessonAttendance(laData || []);
     setLoading(false);
   }
 
@@ -147,7 +169,36 @@ export default function PayrollClient() {
   // 강사 인자를 받아서 계산 (주/보조 강사 공통)
   // - 강의 횟수(sessions) = "출석인원이 1명이라도 있었던" 날짜 수 (is_cancelled 플래그가 아니라
   //   실제 출석기록 유무로 판정. 긴급 휴강으로 일정을 못 지웠어도 출석체크가 없으면 자동 제외됨)
+  // - 레슨 강좌(피아노 등, is_lesson=true)는 출석부 작성 방식(개인별 스케줄 + lesson_attendance)만
+  //   다를 뿐, 강사료는 학생 수와 무관하게 일급으로 계산되므로 일반 강좌와 동일하게
+  //   "그 달에 출석인원이 1명이라도 있었던 날짜 수"를 강의 횟수로 본다.
   function calcPay(course: Course, instructor: Instructor | null) {
+    if (course.is_lesson) {
+      const lessonRows = lessonAttendance.filter(a => a.course_id === course.id);
+      const distinctDates = Array.from(new Set(lessonRows.map(a => a.attend_date))).sort();
+      const sessions = distinctDates.length;
+      const activeDates: CourseDate[] = distinctDates.map((d, idx) => ({
+        id: -1 - idx, course_id: course.id, class_date: d,
+        start_time: null, end_time: null, is_cancelled: false, is_makeup: false,
+      }));
+      const cancelledCount = 0;
+      // 레슨 강좌는 개인별 스케줄이 주마다 달라질 수 있어 "출석체크 누락"을 자동 판정하기 어려워
+      // 일단 경고는 띄우지 않음 (레슨스케줄/학생별 출석현황 화면에서 확인 필요)
+      const missingAttendanceCount = 0;
+
+      if (!instructor || sessions === 0) {
+        return { instructor, sessions, cancelledCount, missingAttendanceCount, totalHours: 0, amount: 0, activeDates };
+      }
+      if (instructor.pay_type === 'hourly') {
+        const totalHours = instructor.class_hours * sessions;
+        const amount = Math.round(instructor.pay_amount * totalHours);
+        return { instructor, sessions, cancelledCount, missingAttendanceCount, totalHours, amount, activeDates };
+      } else {
+        const amount = instructor.pay_amount * sessions;
+        return { instructor, sessions, cancelledCount, missingAttendanceCount, totalHours: 0, amount, activeDates };
+      }
+    }
+
     const allDates = courseDates.filter(d => d.course_id === course.id);
     const activeDates = allDates.filter(d => datesWithAttendance.has(d.id));
     const sessions = activeDates.length;
@@ -185,7 +236,9 @@ export default function PayrollClient() {
     courses.forEach(course => {
       const operationMonths = parseOperationMonths(course.operation_months);
       if (!operationMonths.includes(selectedMonth)) return;
-      const hasDates = courseDates.some(d => d.course_id === course.id);
+      const hasDates = course.is_lesson
+        ? lessonAttendance.some(a => a.course_id === course.id)
+        : courseDates.some(d => d.course_id === course.id);
       if (!hasDates) return;
 
       const main = instructors.find(i => i.id === course.instructor_id);
@@ -633,6 +686,7 @@ export default function PayrollClient() {
               <li>시급: 단가 × 1회당 시간 × 수업 횟수 / 일급: 단가 × 수업 횟수</li>
               <li>실제 출석 기록(1명 이상)이 있는 수업만 강의 횟수에 포함됩니다 (휴강 표시를 깜빡해도 출석이 없으면 자동 제외, 보강은 출석이 있으면 포함)</li>
               <li>⚠ 표시가 뜨면 일정은 있는데 출석 기록이 없는 지난 날짜가 있다는 뜻입니다 - 출석체크 누락인지 실제 휴강인지 출석부에서 확인 후 강사료를 확정해주세요</li>
+              <li>레슨 강좌(피아노 등, 학생마다 개인별 일정)는 출석부 작성 방식만 다를 뿐, "수업 횟수"는 일반 강좌와 동일하게 <strong>출석인원이 1명 이상 있었던 날짜 수</strong>로 계산됩니다 (학생 수와 무관 - 일급 기준)</li>
               <li>원천징수 3.3% 자동 공제 (10원 단위 절사)</li>
               <li>강좌에 주강사/보조강사가 있으면 각각 자동 계산됩니다 (각자 단가 기준)</li>
               <li>인센티브 등 추가 정보는 엑셀에서 수기로 보정해주세요</li>
