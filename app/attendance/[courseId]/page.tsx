@@ -4,6 +4,7 @@ import { getCurrentStaff } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
 import { canAccessCourse } from '@/lib/attendance';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { getTodayKSTYearMonth } from '@/lib/date';
 import TopBar from '@/components/TopBar';
 import CourseAttendanceClient from './CourseAttendanceClient';
 
@@ -79,8 +80,8 @@ export default async function CourseAttendancePage({
         initialAttendance={attendanceRes.data || []}
         initialPayments={coursePayments}
         initialDate={date || null}
-        initialYear={year ? parseInt(year, 10) : new Date().getFullYear()}
-        initialMonth={month ? parseInt(month, 10) : new Date().getMonth() + 1}
+        initialYear={year ? parseInt(year, 10) : getTodayKSTYearMonth().year}
+        initialMonth={month ? parseInt(month, 10) : getTodayKSTYearMonth().month}
         staffRole={staff.role}
         staffName={staff.name || staff.email}
       />

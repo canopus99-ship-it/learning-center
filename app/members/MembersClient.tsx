@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { getTodayKST } from '@/lib/date';
 import * as XLSX from 'xlsx';
 
 type Member = {
@@ -188,7 +189,7 @@ export default function MembersClient() {
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '회원명부');
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayKST();
     XLSX.writeFile(wb, `회원명부_${today}.xlsx`);
   }
 
@@ -212,7 +213,7 @@ export default function MembersClient() {
       discount_veteran: discVeteran,
       discount_disabled: discDisabled,
       discount_other: discOther,
-      received_date: new Date().toISOString().split('T')[0],
+      received_date: getTodayKST(),
       memo,
     };
 

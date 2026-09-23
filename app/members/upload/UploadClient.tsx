@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { getTodayKST } from '@/lib/date';
 import * as XLSX from 'xlsx';
 
 // 감면 매핑
@@ -281,7 +282,7 @@ export default function UploadClient() {
     if (!confirm(`정상 ${okRows.length}건을 등록합니다.\n계속하시겠습니까?`)) return;
 
     setUploading(true);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayKST();
 
     const newMembers = okRows.map(r => ({
       name: r.name,

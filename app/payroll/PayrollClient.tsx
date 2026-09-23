@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { getTodayKST } from '@/lib/date';
 import * as XLSX from 'xlsx';
 
 type Course = {
@@ -164,7 +165,7 @@ export default function PayrollClient() {
   // (attendance는 이미 is_present=true만 불러온 상태)
   const datesWithAttendance = new Set(attendance.map(a => a.course_date_id));
 
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = getTodayKST();
 
   // 강사 인자를 받아서 계산 (주/보조 강사 공통)
   // - 강의 횟수(sessions) = "출석인원이 1명이라도 있었던" 날짜 수 (is_cancelled 플래그가 아니라

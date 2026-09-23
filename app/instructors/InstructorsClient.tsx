@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { getTodayKST } from '@/lib/date';
 import * as XLSX from 'xlsx';
 
 type Instructor = {
@@ -111,7 +112,7 @@ export default function InstructorsClient() {
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '강사명부');
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayKST();
     XLSX.writeFile(wb, `강사명부_${today}.xlsx`);
   }
 

@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { getTodayKST } from '@/lib/date';
 import * as XLSX from 'xlsx';
 
 type Course = {
@@ -263,7 +264,7 @@ export default function EnrollUploadClient({ course, levels }: { course: Course;
     if (!confirm(`신규 ${newRows.length}건 + 재개 ${resumeRows.length}건 = 총 ${total}건을 처리합니다.\n계속하시겠습니까?`)) return;
 
     setUploading(true);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayKST();
 
     // 1) 신규 신청 insert
     let addedCount = 0;

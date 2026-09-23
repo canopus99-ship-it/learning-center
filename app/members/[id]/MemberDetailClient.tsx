@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus } from '@/lib/enrollment';
 import { PAYMENT_METHOD_LABELS } from '@/lib/payments';
 import { changeEnrollmentLevel, type CourseLevelChangeRow } from '@/lib/courseLevels';
+import { getTodayKST } from '@/lib/date';
 
 type Member = {
   id: number;
@@ -141,14 +142,14 @@ export default function MemberDetailClient({
   // 수강 종료 모달
   const [endModalOpen, setEndModalOpen] = useState(false);
   const [endingEnrollment, setEndingEnrollment] = useState<Enrollment | null>(null);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(getTodayKST());
   const [endReason, setEndReason] = useState<'self_request' | 'staff_action'>('self_request');
   const [endMemo, setEndMemo] = useState('');
 
   // 수강 재개 모달
   const [resumeModalOpen, setResumeModalOpen] = useState(false);
   const [resumingEnrollment, setResumingEnrollment] = useState<Enrollment | null>(null);
-  const [resumeDate, setResumeDate] = useState(new Date().toISOString().split('T')[0]);
+  const [resumeDate, setResumeDate] = useState(getTodayKST());
   const [birthDate, setBirthDate] = useState(member.birth_date || '');
   const [gender, setGender] = useState(member.gender || '');
   const [regionType, setRegionType] = useState(member.region_type || '');
@@ -666,7 +667,7 @@ export default function MemberDetailClient({
     // 1) 기존 수강 종료 (기록 보존)
     const { error: endErr } = await supabase.from('enrollments').update({
       status: 'ended',
-      end_date: new Date().toISOString().split('T')[0],
+      end_date: getTodayKST(),
       end_reason: 'staff_action',
       refund_memo: `수강변경 → ${target.name}`,
       ended_at: new Date().toISOString(),
@@ -789,7 +790,7 @@ export default function MemberDetailClient({
   // 수강 종료 모달 열기
   function openEndModal(e: Enrollment) {
     setEndingEnrollment(e);
-    setEndDate(new Date().toISOString().split('T')[0]);
+    setEndDate(getTodayKST());
     setEndReason('self_request');
     setEndMemo('');
     setEndModalOpen(true);
@@ -826,7 +827,7 @@ export default function MemberDetailClient({
   // 수강 재개 모달 열기
   function openResumeModal(e: Enrollment) {
     setResumingEnrollment(e);
-    setResumeDate(new Date().toISOString().split('T')[0]);
+    setResumeDate(getTodayKST());
     setResumeModalOpen(true);
   }
 

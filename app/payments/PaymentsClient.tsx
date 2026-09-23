@@ -17,6 +17,7 @@ import {
 import { STATUS_LABELS, type EnrollmentStatus } from '@/lib/enrollment';
 import { fetchAllRows } from '@/lib/fetchAll';
 import { changeEnrollmentLevel } from '@/lib/courseLevels';
+import { getTodayKST } from '@/lib/date';
 import * as XLSX from 'xlsx';
 
 type Course = {
@@ -144,7 +145,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const [bulkPayModalOpen, setBulkPayModalOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [bulkPayMethod, setBulkPayMethod] = useState<PaymentMethod>('cash');
-  const [bulkPayDate, setBulkPayDate] = useState(new Date().toISOString().split('T')[0]);
+  const [bulkPayDate, setBulkPayDate] = useState(getTodayKST());
   const [bulkReceiptNum, setBulkReceiptNum] = useState('');
   // 셀별로 수정 가능한 금액
   const [cellAmounts, setCellAmounts] = useState<Record<string, number>>({});
@@ -159,31 +160,31 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   } | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState<PaymentMethod>('cash');
-  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
+  const [payDate, setPayDate] = useState(getTodayKST());
   const [receiptNum, setReceiptNum] = useState('');
   const [payMemo, setPayMemo] = useState('');
 
   // 수강 종료 모달
   const [endScheduleModalOpen, setEndScheduleModalOpen] = useState(false);
   const [endingEnrollment, setEndingEnrollment] = useState<Enrollment | null>(null);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(getTodayKST());
   const [endReason, setEndReason] = useState<EndReason>('self_request');
   const [endMemo, setEndMemo] = useState('');
 
   // 재등록 모달
   const [reEnrollModalOpen, setReEnrollModalOpen] = useState(false);
   const [reEnrollEnrollment, setReEnrollEnrollment] = useState<Enrollment | null>(null);
-  const [reEnrollDate, setReEnrollDate] = useState(new Date().toISOString().split('T')[0]);
+  const [reEnrollDate, setReEnrollDate] = useState(getTodayKST());
 
   // 환불 모달 (여러 달 일괄)
   const [refundModalOpen, setRefundModalOpen] = useState(false);
-  const [refundDate, setRefundDate] = useState(new Date().toISOString().split('T')[0]);
+  const [refundDate, setRefundDate] = useState(getTodayKST());
   const [refundMethod, setRefundMethod] = useState<'card_cancel' | 'transfer'>('card_cancel');
   const [refundAmounts, setRefundAmounts] = useState<Record<string, number>>({});
 
   // 이월 모달 (여러 달 일괄)
   const [carryoverModalOpen, setCarryoverModalOpen] = useState(false);
-  const [carryoverDate, setCarryoverDate] = useState(new Date().toISOString().split('T')[0]);
+  const [carryoverDate, setCarryoverDate] = useState(getTodayKST());
   const [carryoverAmounts, setCarryoverAmounts] = useState<Record<string, number>>({});
 
   // 등급 변경(승급) 모달 - 피아노교실처럼 등급별 수강료가 있는 강좌에서
@@ -421,7 +422,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setCellAmounts(initialAmounts);
 
     setBulkPayMethod('cash');
-    setBulkPayDate(new Date().toISOString().split('T')[0]);
+    setBulkPayDate(getTodayKST());
     setBulkReceiptNum('');
     setIsEditMode(false);
     setBulkPayModalOpen(true);
@@ -444,7 +445,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     // 첫 항목의 결제방법/날짜를 기본값으로
     const first = items[0].payment;
     setBulkPayMethod((first.payment_method as any) || 'cash');
-    setBulkPayDate(first.paid_at || new Date().toISOString().split('T')[0]);
+    setBulkPayDate(first.paid_at || getTodayKST());
     setBulkReceiptNum(first.receipt_number || '');
     setIsEditMode(true);
     setBulkPayModalOpen(true);
@@ -578,7 +579,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setEditingPayment({ enrollment, course, existing, month });
     setPayAmount(existing?.amount?.toString() || calc.amount.toString());
     setPayMethod(existing?.payment_method || 'cash');
-    setPayDate(existing?.paid_at || new Date().toISOString().split('T')[0]);
+    setPayDate(existing?.paid_at || getTodayKST());
     setReceiptNum(existing?.receipt_number || '');
     setPayMemo(existing?.memo || '');
     setPaymentModalOpen(true);
@@ -669,7 +670,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   // 수납/환불/이월 모달
   function openEndScheduleModal(enrollment: Enrollment) {
     setEndingEnrollment(enrollment);
-    setEndDate(new Date().toISOString().split('T')[0]);
+    setEndDate(getTodayKST());
     setEndReason('self_request');
     setEndMemo('');
     setEndScheduleModalOpen(true);
@@ -753,7 +754,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   // 재등록 모달 열기 (수강종료된 강좌를 다시 등록)
   function openReEnrollModal(enrollment: Enrollment) {
     setReEnrollEnrollment(enrollment);
-    setReEnrollDate(new Date().toISOString().split('T')[0]);
+    setReEnrollDate(getTodayKST());
     setReEnrollModalOpen(true);
   }
 
@@ -833,7 +834,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     const init: Record<string, number> = {};
     items.forEach(it => { init[it.key] = it.payment.amount; });
     setRefundAmounts(init);
-    setRefundDate(new Date().toISOString().split('T')[0]);
+    setRefundDate(getTodayKST());
     setRefundMethod('card_cancel');
     setRefundModalOpen(true);
   }
@@ -874,7 +875,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     const init: Record<string, number> = {};
     items.forEach(it => { init[it.key] = it.payment.amount; });
     setCarryoverAmounts(init);
-    setCarryoverDate(new Date().toISOString().split('T')[0]);
+    setCarryoverDate(getTodayKST());
     setCarryoverModalOpen(true);
   }
 

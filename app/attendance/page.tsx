@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { getCurrentStaff } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
 import { getAllowedCourseIds } from '@/lib/attendance';
+import { getTodayKST } from '@/lib/date';
 import TopBar from '@/components/TopBar';
 
 type Course = {
@@ -61,7 +62,7 @@ export default async function AttendancePage() {
     }
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getTodayKST();
 
   const [coursesRes, instructorsRes, todayDatesRes] = await Promise.all([
     coursesQuery,
