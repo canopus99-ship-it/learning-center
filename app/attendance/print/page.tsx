@@ -3,6 +3,7 @@ import { getCurrentStaff } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
 import { getAllowedCourseIds } from '@/lib/attendance';
 import TopBar from '@/components/TopBar';
+import { APPROVAL_LINE_KEY, normalizeApprovalLine } from '@/lib/approvalLine';
 import AttendancePrintClient from './AttendancePrintClient';
 
 type Course = {
@@ -43,13 +44,24 @@ export default async function AttendancePrintPageRoute() {
     supabase.from('instructors').select('id, name'),
   ]);
 
+  // 결재라인 설정 (테이블이 아직 없거나 값이 없으면 기본값 사용)
+  let approvalValue: unknown = null;
+  try {
+    const { data } = await supabase.from('app_settings').select('value').eq('key', APPROVAL_LINE_KEY).maybeSingle();
+    approvalValue = data?.value ?? null;
+  } catch {
+    approvalValue = null;
+  }
+  const approvalLine = normalizeApprovalLine(approvalValue);
+  const canEditApproval = staff.role !== 'tablet';
+
   const courses = (coursesRes.data || []) as Course[];
   const instructors = (instructorsRes.data || []) as Instructor[];
 
   return (
     <div>
       <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
-      <AttendancePrintClient courses={courses} instructors={instructors} />
+      <AttendancePrintClient courses={courses} instructors={instructors} initialApprovalLine={approvalLine} canEditApproval={canEditApproval} />
     </div>
   );
 }

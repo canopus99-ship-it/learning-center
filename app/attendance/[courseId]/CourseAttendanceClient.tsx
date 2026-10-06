@@ -6,7 +6,6 @@ import { createClient } from '@/lib/supabase/client';
 import { canCheckAttendance, calculateMonthlyAttendance, filterEnrollmentsForMonthlyPrint } from '@/lib/attendance';
 import { fetchAllRows } from '@/lib/fetchAll';
 import { parseOperationMonths } from '@/lib/payments';
-import { AttendancePrintPage, chunk } from '@/components/AttendancePrintPage';
 
 type Course = {
   id: number;
@@ -268,11 +267,6 @@ export default function CourseAttendanceClient({
   );
   const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
-  // PDF 출력
-  function handlePrintPdf() {
-    window.print();
-  }
-
   return (
     <div style={{ maxWidth: 1200, margin: '40px auto', padding: 20 }}>
       <div className="no-print">
@@ -325,17 +319,6 @@ export default function CourseAttendanceClient({
           })}
         </div>
 
-        <button
-          onClick={handlePrintPdf}
-          style={{
-            marginLeft: 'auto',
-            padding: '8px 16px', background: '#1D9E75', color: 'white',
-            border: 'none', borderRadius: 6, cursor: 'pointer',
-            fontSize: 13, fontWeight: 500,
-          }}
-        >
-          📄 결재 출석부 출력
-        </button>
       </div>
 
       {/* 수업 날짜 선택 (출석체크용) */}
@@ -497,17 +480,6 @@ export default function CourseAttendanceClient({
         </div>
       )}
 
-      {/* 출력용 결재 출석부 (화면에서는 안 보이고 인쇄/PDF에서만 표시) */}
-      <PrintableAttendance
-        course={course}
-        instructorName={instructorName}
-        year={selectedYear}
-        month={selectedMonth}
-        dates={monthDates}
-        enrollments={allEnrollments}
-        attendance={attendance}
-      />
-
       {/* 화면용 월 요약 */}
       <div className="no-print" style={{ background: 'white', borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
         <h3 style={{ fontSize: 14, margin: '0 0 12px' }}>
@@ -522,105 +494,6 @@ export default function CourseAttendanceClient({
             : 0}%`} color="#7B3FBF" />
         </div>
       </div>
-    </div>
-  );
-}
-
-// ============================================
-// 인쇄용 결재 출석부 (본인이 주신 양식대로)
-// ============================================
-function PrintableAttendance({
-  course,
-  instructorName,
-  year,
-  month,
-  dates,
-  enrollments,
-  attendance,
-}: {
-  course: Course;
-  instructorName: string;
-  year: number;
-  month: number;
-  dates: CourseDate[];
-  enrollments: Enrollment[];
-  attendance: Attendance[];
-}) {
-  // 이미 상위에서 필터된 enrollments를 받음 (출석부 화면과 동일한 명단)
-  const printableEnrollments = [...enrollments]
-    .sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || ''))
-    .map(e => ({ id: e.id, memberName: e.members?.name || '' }));
-
-  // 양식: 10일치씩, 20명씩 한 페이지
-  const datesPerPage = 10;
-  const studentsPerPage = 15;
-
-  // 페이지 분할
-  const datePages = chunk(dates, datesPerPage);
-  const totalPages = Math.max(1, Math.ceil(printableEnrollments.length / studentsPerPage));
-
-  // 15명/10일 칸으로 맞추기 (빈 칸은 null로 채움 - AttendancePrintPage가 빈 칸을 그려줌)
-  function padStudents(list: typeof printableEnrollments) {
-    const padded: (typeof printableEnrollments[number] | null)[] = [...list];
-    while (padded.length < studentsPerPage) padded.push(null);
-    return padded;
-  }
-  function padDates(list: CourseDate[]) {
-    const padded: (CourseDate | null)[] = [...list];
-    while (padded.length < datesPerPage) padded.push(null);
-    return padded;
-  }
-
-  return (
-    <div className="print-only" style={{ display: 'none' }}>
-      {datePages.length === 0 ? (
-        // 수업 날짜가 없어도 빈 양식 1장 출력
-        <AttendancePrintPage
-          courseName={course.name}
-          instructorName={instructorName}
-          year={year}
-          month={month}
-          dates={padDates([])}
-          enrollments={padStudents(printableEnrollments.slice(0, studentsPerPage))}
-          attendance={attendance}
-          pageNum={1}
-          totalPages={1}
-        />
-      ) : (
-        datePages.flatMap((datePage, dpIdx) =>
-          Array.from({ length: totalPages }).map((_, spIdx) => {
-            const students = printableEnrollments.slice(spIdx * studentsPerPage, (spIdx + 1) * studentsPerPage);
-            return (
-              <AttendancePrintPage
-                key={`${dpIdx}-${spIdx}`}
-                courseName={course.name}
-                instructorName={instructorName}
-                year={year}
-                month={month}
-                dates={padDates(datePage)}
-                enrollments={padStudents(students)}
-                attendance={attendance}
-                pageNum={dpIdx * totalPages + spIdx + 1}
-                totalPages={datePages.length * totalPages}
-              />
-            );
-          })
-        )
-      )}
-      <style>{`
-        @media print {
-          @page {
-            size: A4 portrait;
-            margin: 8mm 10mm;
-          }
-          html, body {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-          }
-          .no-print { display: none !important; }
-          .print-only { display: block !important; }
-        }
-      `}</style>
     </div>
   );
 }

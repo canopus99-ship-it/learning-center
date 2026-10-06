@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { APPROVAL_LINE_KEY, DEFAULT_APPROVAL_LINE, type ApprovalLine } from '@/lib/approvalLine';
 import { filterEnrollmentsForMonthlyPrint } from '@/lib/attendance';
 import { AttendancePrintPage, chunk, type PrintCourseDate, type PrintEnrollment, type PrintAttendanceRecord } from '@/components/AttendancePrintPage';
 
@@ -53,11 +54,17 @@ function unwrapMember(v: EnrollmentRow['members']): { name: string } | null {
 export default function AttendancePrintClient({
   courses,
   instructors,
+  initialApprovalLine,
+  canEditApproval,
 }: {
   courses: Course[];
   instructors: Instructor[];
+  initialApprovalLine: ApprovalLine;
+  canEditApproval: boolean;
 }) {
   const supabase = createClient();
+  const [approvalLine, setApprovalLine] = useState<ApprovalLine>(initialApprovalLine);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
   const today = new Date();
   const instructorMap = new Map(instructors.map(i => [i.id, i.name]));
 
@@ -305,6 +312,17 @@ export default function AttendancePrintClient({
           >
             {loading ? '준비 중...' : `📄 선택한 ${selectedIds.size}개 강좌 출력물 준비`}
           </button>
+          {canEditApproval && (
+            <button
+              onClick={() => setShowApprovalModal(true)}
+              style={{
+                padding: '10px 18px', borderRadius: 8, fontSize: 14, fontWeight: 600,
+                background: 'white', color: '#444', border: '1px solid #ccc', cursor: 'pointer',
+              }}
+            >
+              ⚙ 결재라인 설정 ({approvalLine.titles.join('-')})
+            </button>
+          )}
           {printData && (
             <button
               onClick={handlePrint}
@@ -350,12 +368,21 @@ export default function AttendancePrintClient({
         )}
       </div>
 
+      {showApprovalModal && (
+        <ApprovalLineModal
+          current={approvalLine}
+          onClose={() => setShowApprovalModal(false)}
+          onSaved={(v) => { setApprovalLine(v); setShowApprovalModal(false); }}
+        />
+      )}
+
       {/* ============================================ */}
       {/* 인쇄용 콘텐츠: 표지 + 강좌별 출석부              */}
       {/* ============================================ */}
       {printData && printData.length > 0 && (
         <div className="print-only" style={{ display: 'none' }}>
           <CoverPage
+            approvalLine={approvalLine}
             year={selectedYear}
             month={selectedMonth}
             rows={printData.map((c, idx) => ({
@@ -447,8 +474,9 @@ function CoursePrintPages({ data, year, month }: { data: CoursePrintData; year: 
 }
 
 function CoverPage({
-  year, month, rows, totalRealCount, totalAttendanceCount,
+  approvalLine, year, month, rows, totalRealCount, totalAttendanceCount,
 }: {
+  approvalLine: ApprovalLine;
   year: number;
   month: number;
   rows: { seq: number; courseName: string; realCount: number; attendanceCount: number }[];
@@ -465,7 +493,8 @@ function CoverPage({
     }}>
       {/* 상단 헤더: 제목 + 결재란 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
-        <div style={{ flex: 1 }}></div>
+        {/* 결재란이 3칸(담당-팀장-과장)으로 넓어져서 좌우 비율을 맞춰 제목이 계속 가운데에 오도록 함 */}
+        <div style={{ flex: 1.5 }}></div>
         <div style={{ flex: 2, textAlign: 'center' }}>
           <h1 style={{ fontSize: 18, margin: 0, fontWeight: 'bold' }}>
             {year}년 중림종합사회복지관
@@ -474,17 +503,23 @@ function CoverPage({
             {month}월 출석부
           </h1>
         </div>
-        <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ flex: 1.5, display: 'flex', justifyContent: 'flex-end' }}>
           <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
             <tbody>
               <tr>
                 <td rowSpan={2} style={{ border: '1px solid black', padding: '4px 6px', textAlign: 'center', width: 20, writingMode: 'vertical-rl', verticalAlign: 'middle' }}>결재</td>
-                <td style={{ border: '1px solid black', padding: '4px 12px', textAlign: 'center', width: 50 }}>담 당</td>
-                <td style={{ border: '1px solid black', padding: '4px 12px', textAlign: 'center', width: 50 }}>과 장</td>
+                {approvalLine.titles.map((t, i) => (
+                  <td key={i} style={{ border: '1px solid black', padding: '4px 10px', textAlign: 'center', width: 46 }}>
+                    {t.length === 2 ? `${t[0]} ${t[1]}` : t}
+                  </td>
+                ))}
               </tr>
               <tr>
-                <td style={{ border: '1px solid black', padding: '4px 12px', height: 30 }}></td>
-                <td style={{ border: '1px solid black', padding: '4px 12px', height: 30, fontSize: 10, textAlign: 'center' }}>전결</td>
+                {approvalLine.titles.map((_, i) => (
+                  <td key={i} style={{ border: '1px solid black', padding: '4px 10px', height: 30, fontSize: 10, textAlign: 'center' }}>
+                    {approvalLine.finalIndex === i ? '전결' : ''}
+                  </td>
+                ))}
               </tr>
             </tbody>
           </table>
@@ -540,3 +575,105 @@ const smallBtnStyle: React.CSSProperties = {
   padding: '4px 10px', background: 'white', border: '1px solid #ddd',
   borderRadius: 4, cursor: 'pointer', fontSize: 12,
 };
+
+
+function ApprovalLineModal({
+  current, onClose, onSaved,
+}: {
+  current: ApprovalLine;
+  onClose: () => void;
+  onSaved: (v: ApprovalLine) => void;
+}) {
+  const supabase = createClient();
+  const [titles, setTitles] = useState<string[]>(current.titles);
+  const [finalIndex, setFinalIndex] = useState<number | null>(current.finalIndex);
+  const [saving, setSaving] = useState(false);
+
+  function move(i: number, dir: -1 | 1) {
+    const j = i + dir;
+    if (j < 0 || j >= titles.length) return;
+    const t = [...titles];
+    [t[i], t[j]] = [t[j], t[i]];
+    setTitles(t);
+    if (finalIndex === i) setFinalIndex(j);
+    else if (finalIndex === j) setFinalIndex(i);
+  }
+  function remove(i: number) {
+    if (titles.length <= 1) return;
+    setTitles(titles.filter((_, k) => k !== i));
+    if (finalIndex === i) setFinalIndex(null);
+    else if (finalIndex !== null && finalIndex > i) setFinalIndex(finalIndex - 1);
+  }
+  async function save() {
+    const cleaned = titles.map(t => t.trim());
+    if (cleaned.some(t => !t)) { alert('빈 직책이 있습니다. 입력하거나 삭제해주세요.'); return; }
+    setSaving(true);
+    const value: ApprovalLine = { titles: cleaned, finalIndex };
+    const { error } = await supabase
+      .from('app_settings')
+      .upsert({ key: APPROVAL_LINE_KEY, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+    setSaving(false);
+    if (error) {
+      alert('저장 실패: ' + error.message + '\n(Supabase에서 app_settings 테이블 생성 SQL을 먼저 실행했는지 확인해주세요.)');
+      return;
+    }
+    onSaved(value);
+  }
+
+  const btn: React.CSSProperties = { padding: '4px 8px', border: '1px solid #ccc', borderRadius: 4, background: 'white', cursor: 'pointer', fontSize: 12 };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+      <div style={{ background: 'white', borderRadius: 12, padding: 24, width: 420, maxWidth: '92vw', maxHeight: '90vh', overflow: 'auto' }}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 17 }}>⚙ 결재라인 설정</h3>
+        <p style={{ margin: '0 0 16px', fontSize: 12, color: '#888' }}>왼쪽부터 결재 순서입니다. 저장하면 모든 PC/태블릿에 적용됩니다.</p>
+
+        {titles.map((t, i) => (
+          <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ width: 18, fontSize: 12, color: '#888' }}>{i + 1}</span>
+            <input
+              value={t}
+              onChange={e => setTitles(titles.map((x, k) => (k === i ? e.target.value : x)))}
+              maxLength={6}
+              style={{ flex: 1, padding: '6px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 14 }}
+            />
+            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 2, whiteSpace: 'nowrap' }}>
+              <input type="radio" name="finalIdx" checked={finalIndex === i} onChange={() => setFinalIndex(i)} />전결
+            </label>
+            <button style={btn} onClick={() => move(i, -1)} disabled={i === 0}>◀</button>
+            <button style={btn} onClick={() => move(i, 1)} disabled={i === titles.length - 1}>▶</button>
+            <button style={{ ...btn, color: '#c00' }} onClick={() => remove(i)} disabled={titles.length <= 1}>삭제</button>
+          </div>
+        ))}
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+          <button style={btn} onClick={() => titles.length < 6 && setTitles([...titles, ''])}>+ 칸 추가</button>
+          <button style={btn} onClick={() => setFinalIndex(null)}>전결 표시 없음</button>
+          <button style={btn} onClick={() => { setTitles(DEFAULT_APPROVAL_LINE.titles); setFinalIndex(DEFAULT_APPROVAL_LINE.finalIndex); }}>기본값(담당-팀장-과장)</button>
+        </div>
+
+        <div style={{ margin: '16px 0 4px', fontSize: 12, color: '#888' }}>미리보기</div>
+        <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+          <tbody>
+            <tr>
+              <td rowSpan={2} style={{ border: '1px solid #333', padding: '4px 6px', writingMode: 'vertical-rl', textAlign: 'center' }}>결재</td>
+              {titles.map((t, i) => <td key={i} style={{ border: '1px solid #333', padding: '4px 10px', textAlign: 'center', minWidth: 40 }}>{t || '　'}</td>)}
+            </tr>
+            <tr>
+              {titles.map((_, i) => <td key={i} style={{ border: '1px solid #333', height: 28, fontSize: 10, textAlign: 'center' }}>{finalIndex === i ? '전결' : ''}</td>)}
+            </tr>
+          </tbody>
+        </table>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+          <button style={{ ...btn, padding: '8px 16px' }} onClick={onClose} disabled={saving}>취소</button>
+          <button
+            onClick={save}
+            disabled={saving}
+            style={{ padding: '8px 18px', border: 'none', borderRadius: 6, background: '#185FA5', color: 'white', fontWeight: 600, cursor: 'pointer' }}
+          >{saving ? '저장 중...' : '저장'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
