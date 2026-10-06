@@ -198,36 +198,51 @@ export default function TodayAttendanceClient({
 
     const isNowAttended = attended.has(slot.key);
 
-    if (isNowAttended) {
-      // 출석 취소
-      await supabase
-        .from('lesson_attendance')
-        .delete()
-        .eq('course_id', course.id)
-        .eq('attend_date', todayStr)
-        .eq('fixed_schedule_id', slot.fixedId);
+    // 저장 결과(error)를 확인하지 않고 화면부터 바꾸면, 인터넷이 불안정할 때
+    // "화면엔 체크됐는데 실제로는 저장 안 됨 → 새로고침하면 사라짐"이 되므로
+    // 저장이 성공한 경우에만 화면에 반영한다.
+    try {
+      if (isNowAttended) {
+        // 출석 취소
+        const { error } = await supabase
+          .from('lesson_attendance')
+          .delete()
+          .eq('course_id', course.id)
+          .eq('attend_date', todayStr)
+          .eq('fixed_schedule_id', slot.fixedId);
 
-      setAttended(prev => {
-        const next = new Set(prev);
-        next.delete(slot.key);
-        return next;
-      });
-    } else {
-      // 출석 체크
-      await supabase.from('lesson_attendance').upsert({
-        course_id: course.id,
-        enrollment_id: slot.enrollmentId,
-        member_id: slot.memberId,
-        fixed_schedule_id: slot.fixedId,
-        lesson_schedule_id: slot.overrideId || null,
-        attend_date: todayStr,
-        is_attended: true,
-      }, { onConflict: 'course_id,fixed_schedule_id,attend_date' });
+        if (error) {
+          alert(`${slot.memberName}님 출석 취소가 저장되지 않았습니다.\n인터넷 연결을 확인하고 다시 눌러주세요.\n(${error.message})`);
+        } else {
+          setAttended(prev => {
+            const next = new Set(prev);
+            next.delete(slot.key);
+            return next;
+          });
+        }
+      } else {
+        // 출석 체크
+        const { error } = await supabase.from('lesson_attendance').upsert({
+          course_id: course.id,
+          enrollment_id: slot.enrollmentId,
+          member_id: slot.memberId,
+          fixed_schedule_id: slot.fixedId,
+          lesson_schedule_id: slot.overrideId || null,
+          attend_date: todayStr,
+          is_attended: true,
+        }, { onConflict: 'course_id,fixed_schedule_id,attend_date' });
 
-      setAttended(prev => new Set([...prev, slot.key]));
+        if (error) {
+          alert(`${slot.memberName}님 출석이 저장되지 않았습니다.\n인터넷 연결을 확인하고 다시 눌러주세요.\n(${error.message})`);
+        } else {
+          setAttended(prev => new Set([...prev, slot.key]));
+        }
+      }
+    } catch (e: any) {
+      alert(`${slot.memberName}님 출석 저장 중 오류가 발생했습니다.\n인터넷 연결을 확인하고 다시 눌러주세요.\n(${e?.message || e})`);
+    } finally {
+      setToggling(null);
     }
-
-    setToggling(null);
   }
 
   // 시간대별 그룹핑

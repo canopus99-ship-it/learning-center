@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { canCheckAttendance, calculateMonthlyAttendance, filterEnrollmentsForMonthlyPrint } from '@/lib/attendance';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { parseOperationMonths } from '@/lib/payments';
 import { AttendancePrintPage, chunk } from '@/components/AttendancePrintPage';
 
 type Course = {
@@ -173,20 +174,33 @@ export default function CourseAttendanceClient({
     return payment?.refund_date || null;
   }
 
-  async function reloadAttendance() {
+  // 서버 기준으로 출석 목록을 다시 불러옴.
+  // 인터넷이 불안정해서 조회가 실패했을 때는 화면의 기존 출석 표시를 그대로 두고(비우지 않고) false만 반환.
+  // (예전에는 조회 실패 시 빈 목록으로 덮어써서, 저장은 됐는데 화면에서만 출석이 싹 사라져 보이는 문제가 있었음)
+  async function reloadAttendance(): Promise<boolean> {
     // 강좌 하나의 누적 출석이 1000행을 넘을 수 있어 끝까지 페이지로 가져옴
-    const { data } = await fetchAllRows<any>((from, to) =>
+    const { data, error } = await fetchAllRows<any>((from, to) =>
       supabase
         .from('attendance')
         .select('*, course_dates!inner(course_id)')
         .eq('course_dates.course_id', course.id)
         .range(from, to)
     );
+    if (error) {
+      console.error('출석 목록 새로고침 실패:', error);
+      return false;
+    }
     setAttendance(data || []);
+    return true;
   }
+
+  // 저장 중인 카드 (같은 시간에 한 번에 하나만 처리 - 느린 연결에서 연타해도 출석↔결석이 되돌려지지 않게)
+  const [savingKey, setSavingKey] = useState<string | null>(null);
 
   // 출석 토글
   async function toggleAttendance(enrollment: Enrollment, courseDate: CourseDate) {
+    if (savingKey) return; // 이전 저장이 끝나기 전의 추가 클릭은 무시
+
     const memberName = enrollment.members?.name || '회원';
 
     // 차단 조건 체크 (환불일 포함)
@@ -198,22 +212,39 @@ export default function CourseAttendanceClient({
     }
 
     const existing = getAttendance(courseDate.id, enrollment.id);
+    setSavingKey(`${courseDate.id}-${enrollment.id}`);
 
-    if (existing) {
-      // 이미 출석체크 되어있음 → 결석으로 토글 (삭제)
-      const { error } = await supabase.from('attendance').delete().eq('id', existing.id);
-      if (error) alert('변경 실패: ' + error.message);
-      else reloadAttendance();
-    } else {
-      // 출석체크
-      const { error } = await supabase.from('attendance').insert([{
-        course_date_id: courseDate.id,
-        enrollment_id: enrollment.id,
-        is_present: true,
-        checked_by: staffName,
-      }]);
-      if (error) alert('변경 실패: ' + error.message);
-      else reloadAttendance();
+    try {
+      if (existing) {
+        // 이미 출석체크 되어있음 → 결석으로 토글 (삭제)
+        const { error } = await supabase.from('attendance').delete().eq('id', existing.id);
+        if (error) {
+          alert(`${memberName}님 출석 취소가 저장되지 않았습니다.\n인터넷 연결을 확인하고 다시 눌러주세요.\n(${error.message})`);
+          await reloadAttendance();
+          return;
+        }
+        setAttendance(prev => prev.filter(a => a.id !== existing.id));
+      } else {
+        // 출석체크 (저장된 행을 돌려받아 화면에 바로 반영)
+        const { data, error } = await supabase.from('attendance').insert([{
+          course_date_id: courseDate.id,
+          enrollment_id: enrollment.id,
+          is_present: true,
+          checked_by: staffName,
+        }]).select().single();
+        if (error) {
+          alert(`${memberName}님 출석이 저장되지 않았습니다.\n인터넷 연결을 확인하고 다시 눌러주세요.\n(${error.message})`);
+          await reloadAttendance();
+          return;
+        }
+        if (data) setAttendance(prev => [...prev, data as Attendance]);
+      }
+      // 서버 기준으로 한 번 더 맞춰봄 (실패해도 방금 반영한 화면은 유지됨)
+      reloadAttendance();
+    } catch (e: any) {
+      alert(`${memberName}님 출석 저장 중 오류가 발생했습니다.\n인터넷 연결을 확인하고 다시 눌러주세요.\n(${e?.message || e})`);
+    } finally {
+      setSavingKey(null);
     }
   }
 
@@ -226,9 +257,15 @@ export default function CourseAttendanceClient({
   );
 
   // 월 운영 여부
-  const operationMonths = course.operation_months
-    ? course.operation_months.split(',').filter(Boolean).map(Number)
-    : [];
+  // - 운영월이 비어 있는 강좌(일회성/비정기 강좌 등)는 parseOperationMonths가 "전체 월"로 처리 (다른 화면과 동일 기준)
+  //   (예전에는 빈 값이면 12개월 전부 비활성화되어, 이런 강좌는 다른 달로 이동 자체가 불가능했음)
+  // - 운영월에 없는 달이라도 수업 날짜가 실제로 등록돼 있으면 항상 선택 가능하게 함
+  const operationMonths = parseOperationMonths(course.operation_months);
+  const monthsWithDates = new Set(
+    dates
+      .filter(d => d.class_date.startsWith(`${selectedYear}-`))
+      .map(d => parseInt(d.class_date.substring(5, 7), 10))
+  );
   const months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
   // PDF 출력
@@ -266,7 +303,7 @@ export default function CourseAttendanceClient({
 
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           {months.map(m => {
-            const isOperating = operationMonths.includes(m);
+            const isOperating = operationMonths.includes(m) || monthsWithDates.has(m);
             return (
               <button
                 key={m}
@@ -415,6 +452,7 @@ export default function CourseAttendanceClient({
                       alignItems: 'center',
                       gap: 8,
                       transition: 'all 0.15s',
+                      opacity: savingKey === `${selectedDate.id}-${e.id}` ? 0.5 : 1,
                     }}
                   >
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -435,7 +473,7 @@ export default function CourseAttendanceClient({
                       width: 44, height: 44,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}>
-                      {!check.canCheck ? '⛔' : (isPresent ? '✓' : '○')}
+                      {savingKey === `${selectedDate.id}-${e.id}` ? '…' : (!check.canCheck ? '⛔' : (isPresent ? '✓' : '○'))}
                     </div>
                   </div>
                 );
