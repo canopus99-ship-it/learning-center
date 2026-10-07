@@ -21,8 +21,10 @@ type Instructor = {
 
 export default function InstructorDetailClient({
   instructor: initialInstructor,
+  courses,
 }: {
   instructor: Instructor;
+  courses: { id: number; name: string; category: string | null; is_active: boolean }[];
 }) {
   const supabase = createClient();
   const router = useRouter();
@@ -240,6 +242,31 @@ export default function InstructorDetailClient({
               <label style={labelStyle}>메모</label>
               <textarea value={memo} onChange={(e) => setMemo(e.target.value)} style={{ ...inputStyle, minHeight: 60, fontFamily: 'inherit' }} />
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* 담당 강좌 */}
+      <div style={{
+        background: 'white', borderRadius: 12, padding: 24, marginBottom: 16,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+      }}>
+        <h2 style={{ fontSize: 16, margin: '0 0 12px' }}>📚 담당 강좌 ({courses.filter(c => c.is_active).length})</h2>
+        {courses.length === 0 ? (
+          <p style={{ fontSize: 13, color: '#888', margin: 0 }}>강좌 등록 시 이 강사로 지정된 강좌가 없습니다.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {courses.map(c => (
+              <Link key={c.id} href={`/courses/${c.id}`} style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+                background: '#fafafa', borderRadius: 8, textDecoration: 'none', color: '#222',
+                fontSize: 14, opacity: c.is_active ? 1 : 0.5,
+              }}>
+                <strong>{c.name}</strong>
+                {c.category && <span style={{ fontSize: 11, color: '#888' }}>{c.category}</span>}
+                {!c.is_active && <span style={{ fontSize: 11, color: '#888' }}>(종료/비활성)</span>}
+              </Link>
+            ))}
           </div>
         )}
       </div>

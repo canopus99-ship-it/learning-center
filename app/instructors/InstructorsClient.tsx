@@ -21,10 +21,13 @@ type Instructor = {
   memo: string | null;
 };
 
+type CourseLite = { id: number; name: string; is_active: boolean; instructor_id: number | null };
+
 export default function InstructorsClient() {
   const supabase = createClient();
   const router = useRouter();
   const [instructors, setInstructors] = useState<Instructor[]>([]);
+  const [courses, setCourses] = useState<CourseLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -57,6 +60,12 @@ export default function InstructorsClient() {
     } else {
       setInstructors(data || []);
     }
+    const { data: cs } = await supabase
+      .from('courses')
+      .select('id, name, is_active, instructor_id')
+      .not('instructor_id', 'is', null)
+      .order('name');
+    setCourses((cs || []) as CourseLite[]);
     setLoading(false);
   }
 
@@ -158,6 +167,7 @@ export default function InstructorsClient() {
     return (
       i.name?.toLowerCase().includes(q) ||
       i.phone?.includes(q) ||
+      courses.some(c => c.instructor_id === i.id && c.name.toLowerCase().includes(q)) ||
       i.memo?.toLowerCase().includes(q)
     );
   });
@@ -333,6 +343,7 @@ export default function InstructorsClient() {
             <thead>
               <tr style={{ borderBottom: '1px solid #eee', background: '#fafafa' }}>
                 <th style={thStyle}>이름</th>
+                <th style={thStyle}>담당 강좌</th>
                 <th style={thStyle}>연락처</th>
                 <th style={thStyle}>급여</th>
                 <th style={thStyle}>1회 강의</th>
@@ -354,6 +365,20 @@ export default function InstructorsClient() {
                   onMouseLeave={(e) => e.currentTarget.style.background = ''}
                 >
                   <td style={tdStyle}><strong>{i.name}</strong></td>
+                  <td style={tdStyle}>
+                    {(() => {
+                      const mine = courses.filter(c => c.instructor_id === i.id && c.is_active);
+                      if (mine.length === 0) return <span style={{ color: '#aaa' }}>-</span>;
+                      return (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 11, padding: '2px 8px', background: '#E6F1FB', color: '#185FA5', borderRadius: 10 }}>{mine[0].name}</span>
+                          {mine.length > 1 && (
+                            <span style={{ fontSize: 11, color: '#888' }}>외 {mine.length - 1}개</span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td style={tdStyle}>{i.phone || '-'}</td>
                   <td style={tdStyle}>
                     {i.pay_type === 'hourly' ? '시급' : '일급'}{' '}

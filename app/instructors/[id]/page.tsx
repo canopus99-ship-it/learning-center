@@ -33,10 +33,17 @@ export default async function InstructorDetailPage({
     notFound();
   }
 
+  const { data: courses } = await supabase
+    .from('courses')
+    .select('id, name, category, is_active')
+    .eq('instructor_id', instructorId)
+    .order('is_active', { ascending: false })
+    .order('name');
+
   return (
     <div>
       <TopBar staffName={staff.name || '직원'} staffEmail={staff.email} staffRole={staff.role} />
-      <InstructorDetailClient instructor={instructor} />
+      <InstructorDetailClient instructor={instructor} courses={courses || []} />
     </div>
   );
 }
