@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { formatTime12 } from '@/lib/time';
 import type { ApprovalLine } from '@/lib/approvalLine';
-import { buildEndedMap, buildMonthlyLessonDates, isEndedOn, monthBounds, mondaysOverlappingMonth, type MonthOverride } from '@/lib/lessonMonth';
+import { buildEndedMap, buildMonthlyLessons, isEndedOn, lessonKey, monthBounds, mondaysOverlappingMonth, type MonthOverride } from '@/lib/lessonMonth';
 
 type Course = { id: number; name: string };
 type Enrollment = {
@@ -100,7 +100,7 @@ export default function LessonPrintClient({
         .order('day_of_week').order('start_time'),
       supabase
         .from('lesson_schedules')
-        .select('fixed_schedule_id, week_start, schedule_date, is_cancelled')
+        .select('fixed_schedule_id, week_start, schedule_date, start_time, is_cancelled')
         .eq('course_id', course.id)
         .gte('week_start', weeks[0])
         .lte('week_start', weeks[weeks.length - 1]),
@@ -134,27 +134,31 @@ export default function LessonPrintClient({
 
   // 수강 종료한 회원은 종료일부터 레슨일에서 빠짐
   const endedMap = buildEndedMap(enrollments);
-  const lessonDates = buildMonthlyLessonDates(fixedSchedules, overrides, closedDates, selectedYear, selectedMonth, endedMap);
+  const lessons = buildMonthlyLessons(fixedSchedules, overrides, closedDates, selectedYear, selectedMonth, endedMap);
 
-  // 회원별 출석한 날짜
-  const attendedByMember = new Map<number, Set<string>>();
+  // 회원별 출석 기록 (고정 스케줄 id + 날짜 단위 → 같은 날 2회 레슨도 각각 구분)
+  const attendedByMember = new Map<number, Map<string, string>>(); // key → 날짜
   attendance.forEach(a => {
     if (!a.is_attended) return;
     const memberId = a.member_id ?? (a.fixed_schedule_id ? fixedToMember.get(a.fixed_schedule_id) : undefined);
     if (!memberId) return;
-    if (!attendedByMember.has(memberId)) attendedByMember.set(memberId, new Set());
-    attendedByMember.get(memberId)!.add(a.attend_date);
+    if (!attendedByMember.has(memberId)) attendedByMember.set(memberId, new Map());
+    attendedByMember.get(memberId)!.set(lessonKey(a.fixed_schedule_id, a.attend_date), a.attend_date);
   });
 
   // 명단: 그 달에 레슨 일정이나 출석 기록이 있었던 회원 (종료한 회원 포함)
-  const memberIds = new Set<number>([...Array.from(lessonDates.keys()), ...Array.from(attendedByMember.keys())]);
+  const memberIds = new Set<number>([...Array.from(lessons.keys()), ...Array.from(attendedByMember.keys())]);
   const printRows: PrintRow[] = Array.from(memberIds)
     .map(memberId => {
-      const scheduled = lessonDates.get(memberId) || [];
-      const attended = attendedByMember.get(memberId) || new Set<string>();
-      // 예정에 없던 날 출석한 기록(보강 등)도 실제 운영 기록이므로 칸으로 함께 표시
-      const allDates = Array.from(new Set([...scheduled, ...Array.from(attended)])).sort();
-      const cells = allDates.map(date => ({ date, attended: attended.has(date) }));
+      const scheduled = lessons.get(memberId) || [];
+      const attended = attendedByMember.get(memberId) || new Map<string, string>();
+      const scheduledKeys = new Set(scheduled.map(o => lessonKey(o.fixedId, o.date)));
+      const cells = scheduled.map(o => ({ date: o.date, attended: attended.has(lessonKey(o.fixedId, o.date)) }));
+      // 예정에 없던 레슨에 출석한 기록(보강 등)도 실제 운영 기록이므로 칸으로 함께 표시
+      attended.forEach((date, key) => {
+        if (!scheduledKeys.has(key)) cells.push({ date, attended: true });
+      });
+      cells.sort((x, y) => x.date.localeCompare(y.date));
       return {
         memberId,
         name: memberNameMap.get(memberId) || '회원',

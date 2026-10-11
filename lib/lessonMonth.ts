@@ -16,6 +16,7 @@ export type MonthFixed = {
   member_id: number;
   enrollment_id?: number;
   day_of_week: number; // 0=월~4=금
+  start_time?: string;
   effective_from: string;
   effective_until: string | null;
 };
@@ -24,6 +25,7 @@ export type MonthOverride = {
   fixed_schedule_id: number | null;
   week_start: string;
   schedule_date: string;
+  start_time?: string;
   is_cancelled: boolean;
 };
 
@@ -93,20 +95,31 @@ export function isEndedOn(endedMap: Map<number, string>, enrollmentId: number | 
   return end === '' || dateStr >= end;
 }
 
+export type LessonOccurrence = {
+  date: string;     // YYYY-MM-DD
+  fixedId: number;  // 어느 고정 스케줄의 레슨인지 (같은 날 오전·오후 2회 받는 회원 구분용)
+};
+
+/** 출석 기록과 레슨을 짝지을 때 쓰는 키 (고정 스케줄 id + 날짜) */
+export function lessonKey(fixedId: number | null | undefined, date: string): string {
+  return `${fixedId ?? 'x'}|${date}`;
+}
+
 /**
- * 회원별 그 달 레슨 예정일 (정렬된 날짜 목록)
+ * 회원별 그 달 레슨 목록 (날짜순)
+ * 같은 날 레슨이 2번(오전·오후)이면 그 날짜가 2번 들어감.
  */
-export function buildMonthlyLessonDates(
+export function buildMonthlyLessons(
   fixedSchedules: MonthFixed[],
   overrides: MonthOverride[],
   closedDates: Set<string>,
   year: number,
   month: number,
   endedMap?: Map<number, string>
-): Map<number, string[]> {
+): Map<number, LessonOccurrence[]> {
   const { start, end } = monthBounds(year, month);
   const weeks = mondaysOverlappingMonth(year, month);
-  const byMember = new Map<number, Set<string>>();
+  const byMember = new Map<number, Map<string, LessonOccurrence & { time: string }>>();
 
   weeks.forEach(weekStart => {
     fixedSchedules.forEach(f => {
@@ -121,12 +134,21 @@ export function buildMonthlyLessonDates(
       if (getOffDayReason(dateStr, closedDates)) return;
       if (endedMap && isEndedOn(endedMap, f.enrollment_id, dateStr)) return;
 
-      if (!byMember.has(f.member_id)) byMember.set(f.member_id, new Set());
-      byMember.get(f.member_id)!.add(dateStr);
+      if (!byMember.has(f.member_id)) byMember.set(f.member_id, new Map());
+      byMember.get(f.member_id)!.set(lessonKey(f.id, dateStr), {
+        date: dateStr,
+        fixedId: f.id,
+        time: (ovr?.start_time || f.start_time || ''),
+      });
     });
   });
 
-  const result = new Map<number, string[]>();
-  byMember.forEach((set, memberId) => result.set(memberId, Array.from(set).sort()));
+  const result = new Map<number, LessonOccurrence[]>();
+  byMember.forEach((map, memberId) => {
+    const list = Array.from(map.values())
+      .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
+      .map(({ date, fixedId }) => ({ date, fixedId }));
+    result.set(memberId, list);
+  });
   return result;
 }
