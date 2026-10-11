@@ -5,13 +5,14 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { formatTime12 } from '@/lib/time';
 import type { ApprovalLine } from '@/lib/approvalLine';
-import { buildMonthlyLessonDates, monthBounds, mondaysOverlappingMonth, type MonthOverride } from '@/lib/lessonMonth';
+import { buildEndedMap, buildMonthlyLessonDates, isEndedOn, monthBounds, mondaysOverlappingMonth, type MonthOverride } from '@/lib/lessonMonth';
 
 type Course = { id: number; name: string };
 type Enrollment = {
   id: number;
   member_id: number;
   status: string;
+  end_date: string | null;
   members: { id: number; name: string } | null;
 };
 type FixedSchedule = {
@@ -131,7 +132,9 @@ export default function LessonPrintClient({
   const memberNameMap = new Map(enrollments.map(e => [e.member_id, e.members?.name || '']));
   const fixedToMember = new Map(fixedSchedules.map(f => [f.id, f.member_id]));
 
-  const lessonDates = buildMonthlyLessonDates(fixedSchedules, overrides, closedDates, selectedYear, selectedMonth);
+  // 수강 종료한 회원은 종료일부터 레슨일에서 빠짐
+  const endedMap = buildEndedMap(enrollments);
+  const lessonDates = buildMonthlyLessonDates(fixedSchedules, overrides, closedDates, selectedYear, selectedMonth, endedMap);
 
   // 회원별 출석한 날짜
   const attendedByMember = new Map<number, Set<string>>();
@@ -191,6 +194,7 @@ export default function LessonPrintClient({
   const scheduleByDay: Record<number, FixedSchedule[]> = { 0: [], 1: [], 2: [], 3: [], 4: [] };
   fixedSchedules.forEach(f => {
     if (f.effective_until && f.effective_until < todayStr) return;
+    if (isEndedOn(endedMap, f.enrollment_id, todayStr)) return; // 종료한 회원은 현재 스케줄표에서 제외
     if (f.day_of_week >= 0 && f.day_of_week <= 4) {
       scheduleByDay[f.day_of_week].push(f);
     }

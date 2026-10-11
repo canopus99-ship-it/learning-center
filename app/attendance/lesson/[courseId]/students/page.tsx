@@ -1,5 +1,6 @@
 import { redirect, notFound } from 'next/navigation';
 import { getCurrentStaff } from '@/lib/auth';
+import { canAccessCourse } from '@/lib/attendance';
 import { createClient } from '@/lib/supabase/server';
 import TopBar from '@/components/TopBar';
 import StudentsClient from './StudentsClient';
@@ -10,6 +11,9 @@ export default async function LessonStudentsPage({ params }: { params: { courseI
 
   const supabase = await createClient();
   const courseId = parseInt(params.courseId, 10);
+
+  // 권한 체크: 태블릿 계정은 배정된 강좌만 (일반 강좌 출석부와 동일)
+  if (!canAccessCourse(staff, courseId)) redirect('/attendance?error=no_access');
 
   const { data: course } = await supabase
     .from('courses')

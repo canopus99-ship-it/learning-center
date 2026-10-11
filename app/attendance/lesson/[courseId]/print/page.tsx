@@ -1,5 +1,6 @@
 import { redirect, notFound } from 'next/navigation';
 import { getCurrentStaff } from '@/lib/auth';
+import { canAccessCourse } from '@/lib/attendance';
 import { createClient } from '@/lib/supabase/server';
 import TopBar from '@/components/TopBar';
 import { APPROVAL_LINE_KEY, normalizeApprovalLine } from '@/lib/approvalLine';
@@ -11,6 +12,9 @@ export default async function LessonPrintPage({ params }: { params: { courseId: 
 
   const supabase = await createClient();
   const courseId = parseInt(params.courseId, 10);
+
+  // 권한 체크: 태블릿 계정은 배정된 강좌만 (일반 강좌 출석부와 동일)
+  if (!canAccessCourse(staff, courseId)) redirect('/attendance?error=no_access');
 
   const { data: course } = await supabase
     .from('courses')
@@ -37,7 +41,7 @@ export default async function LessonPrintPage({ params }: { params: { courseId: 
   // (실제 명단은 "그 달에 레슨 일정이나 출석이 있었던 회원"으로 화면에서 걸러짐)
   const { data: enrollmentsRaw } = await supabase
     .from('enrollments')
-    .select('id, member_id, status, members(id, name, phone)')
+    .select('id, member_id, status, end_date, members(id, name, phone)')
     .eq('course_id', courseId)
     .in('status', ['active', 'paused', 'ended']);
 
@@ -55,6 +59,7 @@ export default async function LessonPrintPage({ params }: { params: { courseId: 
     id: e.id,
     member_id: e.member_id,
     status: e.status,
+    end_date: e.end_date || null,
     members: Array.isArray(e.members) ? (e.members[0] || null) : (e.members || null),
   }));
 

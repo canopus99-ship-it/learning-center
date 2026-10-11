@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { formatTime12, hourLabel12 } from '@/lib/time';
 import { getHolidayName } from '@/lib/holidays';
+import { buildEndedMap, isEndedOn } from '@/lib/lessonMonth';
 
 type Course = {
   id: number;
@@ -20,6 +21,7 @@ type Enrollment = {
   id: number;
   member_id: number;
   status: string;
+  end_date: string | null;
   members: Member | null;
 };
 
@@ -174,6 +176,9 @@ export default function LessonScheduleClient({
     return map;
   }, [enrollments]);
 
+  // 수강 종료한 회원: 종료일부터 스케줄에서 자동으로 빠짐
+  const endedMap = useMemo(() => buildEndedMap(enrollments), [enrollments]);
+
   // 이번 주에 보여줄 슬롯: 고정 + override 병합
   const weekSlots = useMemo(() => {
     // day별로 정리
@@ -191,6 +196,9 @@ export default function LessonScheduleClient({
     // 고정 스케줄 기준으로 넣기
     fixedSchedules.forEach(f => {
       const ovr = overrides.find(o => o.fixed_schedule_id === f.id);
+      // 이 슬롯의 실제 날짜가 수강 종료일 이후면 표시하지 않음
+      const slotDate = ovr && !ovr.is_cancelled ? ovr.schedule_date : ymd(addDays(weekStart, f.day_of_week));
+      if (isEndedOn(endedMap, f.enrollment_id, slotDate)) return;
       if (ovr) {
         if (ovr.is_cancelled) {
           // 이번 주 취소
@@ -229,7 +237,8 @@ export default function LessonScheduleClient({
     });
 
     return result;
-  }, [fixedSchedules, overrides]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixedSchedules, overrides, endedMap, weekStartStr]);
 
   function prevWeek() { setWeekStart(prev => addDays(prev, -7)); }
   function nextWeek() { setWeekStart(prev => addDays(prev, 7)); }
@@ -368,16 +377,44 @@ export default function LessonScheduleClient({
     loadData();
   }
 
-  // 고정 스케줄 영구 삭제
-  // 연관 데이터 순서대로 삭제 (출석 기록 → 이번 주 변경분 → 고정 스케줄)
-  // lesson_attendance가 fixed_schedule_id를 FK로 참조하므로, 출석 기록이 이미 있는 상태에서
-  // lesson_fixed_schedules만 먼저 지우면 FK 위반으로 삭제가 실패한다.
+  // 고정 스케줄 삭제
+  // - 이 스케줄로 기록된 출석이 없으면: 예전처럼 완전히 삭제 (잘못 등록한 경우 등)
+  // - 출석 기록이 있으면: 지우지 않고 "이번 주부터 종료" 처리 (effective_until = 지난주 일요일)
+  //   → 지난 출석 기록, 강사료, 통계, 지난달 출석부는 그대로 유지됨
   async function handleDeleteFixed() {
     if (!selectedFixed) return;
-    if (!confirm(`${memberNameMap.get(selectedFixed.member_id)}님의 고정 스케줄을 완전히 삭제하시겠습니까?\n\n이 스케줄로 기록된 출석 내역도 함께 삭제됩니다.\n(이후 모든 주에서 사라집니다)`)) return;
+    const name = memberNameMap.get(selectedFixed.member_id) || '회원';
+
+    const { count, error: cntErr } = await supabase
+      .from('lesson_attendance')
+      .select('id', { count: 'exact', head: true })
+      .eq('fixed_schedule_id', selectedFixed.id);
+    if (cntErr) { alert('출석 기록 확인 실패: ' + cntErr.message); return; }
+
+    if ((count || 0) > 0) {
+      const todayMonday = getMonday(today);
+      const untilStr = ymd(addDays(todayMonday, -1));
+      if (!confirm(`${name}님의 이 스케줄에는 출석 기록이 ${count}건 있습니다.\n\n기록을 지키기 위해 삭제하지 않고 이번 주(${fmtWeekLabel(todayMonday)})부터 스케줄을 종료합니다.\n지난 출석 기록은 그대로 남습니다.\n\n진행하시겠습니까?`)) return;
+      setSaving(true);
+      const { error: closeErr } = await supabase
+        .from('lesson_fixed_schedules')
+        .update({ effective_until: untilStr })
+        .eq('id', selectedFixed.id);
+      if (closeErr) { setSaving(false); alert('종료 처리 실패: ' + closeErr.message); return; }
+      // 이번 주 이후에 걸려 있던 "이번 주만 변경/취소" 기록은 더 이상 필요 없으므로 정리
+      await supabase
+        .from('lesson_schedules')
+        .delete()
+        .eq('fixed_schedule_id', selectedFixed.id)
+        .gte('week_start', ymd(todayMonday));
+      setSaving(false);
+      setModal(null);
+      loadData();
+      return;
+    }
+
+    if (!confirm(`${name}님의 고정 스케줄을 완전히 삭제하시겠습니까?\n(출석 기록이 없는 스케줄이라 완전히 지워집니다)`)) return;
     setSaving(true);
-    const { error: attErr } = await supabase.from('lesson_attendance').delete().eq('fixed_schedule_id', selectedFixed.id);
-    if (attErr) { setSaving(false); alert('출석 기록 삭제 실패: ' + attErr.message); return; }
     const { error: schedErr } = await supabase.from('lesson_schedules').delete().eq('fixed_schedule_id', selectedFixed.id);
     if (schedErr) { setSaving(false); alert('주간 변경 기록 삭제 실패: ' + schedErr.message); return; }
     const { error } = await supabase.from('lesson_fixed_schedules').delete().eq('id', selectedFixed.id);

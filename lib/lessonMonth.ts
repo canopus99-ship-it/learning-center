@@ -14,6 +14,7 @@ import { getHolidayName } from './holidays';
 export type MonthFixed = {
   id: number;
   member_id: number;
+  enrollment_id?: number;
   day_of_week: number; // 0=월~4=금
   effective_from: string;
   effective_until: string | null;
@@ -68,6 +69,31 @@ export function getOffDayReason(dateStr: string, closedDates: Set<string>): stri
 }
 
 /**
+ * 수강 종료 정보: enrollment_id → 종료일 ('' = 종료일 없이 종료됨 → 언제나 종료로 봄)
+ * 종료(ended)가 아닌 수강신청은 들어가지 않음.
+ */
+export function buildEndedMap(
+  enrollments: { id: number; status: string; end_date?: string | null }[]
+): Map<number, string> {
+  const map = new Map<number, string>();
+  enrollments.forEach(e => {
+    if (e.status === 'ended') map.set(e.id, e.end_date || '');
+  });
+  return map;
+}
+
+/**
+ * 그 날짜에 이미 수강이 끝난 상태인지.
+ * 종료일 당일부터 레슨에서 빠짐 (출석체크 규칙과 동일: 종료일 전날까지만 출석 가능)
+ */
+export function isEndedOn(endedMap: Map<number, string>, enrollmentId: number | undefined, dateStr: string): boolean {
+  if (enrollmentId === undefined) return false;
+  const end = endedMap.get(enrollmentId);
+  if (end === undefined) return false;
+  return end === '' || dateStr >= end;
+}
+
+/**
  * 회원별 그 달 레슨 예정일 (정렬된 날짜 목록)
  */
 export function buildMonthlyLessonDates(
@@ -75,7 +101,8 @@ export function buildMonthlyLessonDates(
   overrides: MonthOverride[],
   closedDates: Set<string>,
   year: number,
-  month: number
+  month: number,
+  endedMap?: Map<number, string>
 ): Map<number, string[]> {
   const { start, end } = monthBounds(year, month);
   const weeks = mondaysOverlappingMonth(year, month);
@@ -92,6 +119,7 @@ export function buildMonthlyLessonDates(
 
       if (dateStr < start || dateStr > end) return;
       if (getOffDayReason(dateStr, closedDates)) return;
+      if (endedMap && isEndedOn(endedMap, f.enrollment_id, dateStr)) return;
 
       if (!byMember.has(f.member_id)) byMember.set(f.member_id, new Set());
       byMember.get(f.member_id)!.add(dateStr);

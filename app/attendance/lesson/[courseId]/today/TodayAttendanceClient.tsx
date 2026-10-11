@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { buildEndedMap, isEndedOn } from '@/lib/lessonMonth';
 
 type Course = {
   id: number;
@@ -13,6 +14,7 @@ type Enrollment = {
   id: number;
   member_id: number;
   status: string;
+  end_date: string | null;
   members: { id: number; name: string; phone: string | null } | null;
 };
 
@@ -105,16 +107,19 @@ export default function TodayAttendanceClient({
 
   const memberNameMap = new Map<number, string>();
   enrollments.forEach(e => { if (e.members) memberNameMap.set(e.member_id, e.members.name); });
+  // 수강 종료한 회원은 종료일부터 오늘 출석 목록에서 자동으로 빠짐
+  const endedMap = buildEndedMap(enrollments);
 
   const loadData = useCallback(async () => {
     setLoading(true);
 
-    // 오늘 요일의 고정 스케줄
+    // 이번 주에 유효한 고정 스케줄 전체
+    // (예전에는 오늘 요일 것만 불러와서, '이번 주만 변경'으로 다른 요일에서 오늘로 옮겨 온 레슨이
+    //  오늘 목록에 안 나오는 문제가 있었음 → 전체를 불러온 뒤 아래에서 오늘 것만 골라냄)
     const { data: fixed } = await supabase
       .from('lesson_fixed_schedules')
       .select('*')
       .eq('course_id', course.id)
-      .eq('day_of_week', dow)
       .lte('effective_from', weekStartStr)
       // 영구 변경으로 대체된 예전 스케줄(오늘 기준 이미 지남)은 제외
       .or(`effective_until.is.null,effective_until.gte.${weekStartStr}`)
@@ -148,6 +153,7 @@ export default function TodayAttendanceClient({
     const result: TodaySlot[] = [];
 
     fixedList.forEach(f => {
+      if (isEndedOn(endedMap, f.enrollment_id, todayStr)) return; // 수강 종료한 회원
       const ovr = overrideList.find(o => o.fixed_schedule_id === f.id);
 
       if (ovr) {
@@ -169,6 +175,7 @@ export default function TodayAttendanceClient({
         }
         // 원래 요일(오늘)인데 override로 다른 날로 이동된 경우는 표시 안 함
       } else {
+        if (f.day_of_week !== dow) return; // 고정 요일이 오늘이 아니면 제외
         // 고정 스케줄 그대로
         result.push({
           key: `f-${f.id}`,
