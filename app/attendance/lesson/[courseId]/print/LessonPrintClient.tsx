@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { formatTime12 } from '@/lib/time';
+import type { ApprovalLine } from '@/lib/approvalLine';
+import { buildMonthlyLessonDates, monthBounds, mondaysOverlappingMonth, type MonthOverride } from '@/lib/lessonMonth';
 
 type Course = { id: number; name: string };
 type Enrollment = {
@@ -23,37 +25,53 @@ type FixedSchedule = {
   effective_until: string | null;
 };
 type AttendanceRecord = {
-  fixed_schedule_id: number;
+  fixed_schedule_id: number | null;
+  member_id: number | null;
   attend_date: string;
   is_attended: boolean;
 };
 
 const DAYS = ['월', '화', '수', '목', '금'];
 
+// 한 줄에 들어가는 레슨일 칸 수 (주 3회 × 4주 = 최대 12회).
+// 혹시 12회를 넘는 회원이 있으면 같은 회원 칸이 한 줄 더 늘어남.
+const CELLS_PER_LINE = 12;
+// 한 페이지(A4 가로)에 들어가는 줄 수 (회원 1명 = 1줄, 12회 초과 회원은 2줄)
+const LINES_PER_PAGE = 14;
+
 function ymd(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// 해당 월의 평일(월~금) 날짜 전체 목록 (다른 강좌 출석부와 동일하게 실제 날짜 기준으로 컬럼을 만듦)
-function getWeekdaysOfMonth(year: number, month: number): Date[] {
-  const result: Date[] = [];
-  const lastDay = new Date(year, month, 0).getDate();
-  for (let day = 1; day <= lastDay; day++) {
-    const d = new Date(year, month - 1, day);
-    const dow = d.getDay();
-    if (dow >= 1 && dow <= 5) result.push(d);
-  }
-  return result;
+function shortDate(dateStr: string): string {
+  return `${parseInt(dateStr.substring(5, 7), 10)}/${parseInt(dateStr.substring(8, 10), 10)}`;
 }
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  if (arr.length === 0) return [[]];
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+type PrintRow = {
+  memberId: number;
+  name: string;
+  cells: { date: string; attended: boolean }[];
+  attendedCount: number;
+  scheduledCount: number;
+};
 
 export default function LessonPrintClient({
   course,
   instructorName,
   enrollments,
+  approvalLine,
 }: {
   course: Course;
   instructorName: string;
   enrollments: Enrollment[];
+  approvalLine: ApprovalLine;
 }) {
   const supabase = createClient();
   const today = new Date();
@@ -62,16 +80,17 @@ export default function LessonPrintClient({
   const [selectedYear, setSelectedYear] = useState(today.getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(today.getMonth() + 1);
   const [fixedSchedules, setFixedSchedules] = useState<FixedSchedule[]>([]);
+  const [overrides, setOverrides] = useState<MonthOverride[]>([]);
+  const [closedDates, setClosedDates] = useState<Set<string>>(new Set());
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const monthStart = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-01`;
-    const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
-    const monthEnd = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    const { start: monthStart, end: monthEnd } = monthBounds(selectedYear, selectedMonth);
+    const weeks = mondaysOverlappingMonth(selectedYear, selectedMonth);
 
-    const [{ data: fixed }, { data: att }] = await Promise.all([
+    const [{ data: fixed }, { data: ovr }, { data: closed }, { data: att }] = await Promise.all([
       supabase
         .from('lesson_fixed_schedules')
         .select('*')
@@ -79,48 +98,91 @@ export default function LessonPrintClient({
         .lte('effective_from', monthEnd)
         .order('day_of_week').order('start_time'),
       supabase
+        .from('lesson_schedules')
+        .select('fixed_schedule_id, week_start, schedule_date, is_cancelled')
+        .eq('course_id', course.id)
+        .gte('week_start', weeks[0])
+        .lte('week_start', weeks[weeks.length - 1]),
+      supabase
+        .from('lesson_closed_days')
+        .select('closed_date')
+        .eq('course_id', course.id)
+        .gte('closed_date', monthStart)
+        .lte('closed_date', monthEnd),
+      supabase
         .from('lesson_attendance')
-        .select('fixed_schedule_id, attend_date, is_attended')
+        .select('fixed_schedule_id, member_id, attend_date, is_attended')
         .eq('course_id', course.id)
         .gte('attend_date', monthStart)
         .lte('attend_date', monthEnd),
     ]);
 
     setFixedSchedules(fixed || []);
+    setOverrides(ovr || []);
+    // 휴무일 테이블이 아직 없을 때(SQL 실행 전)도 화면이 깨지지 않도록 data가 없으면 빈 목록
+    setClosedDates(new Set((closed || []).map((c: { closed_date: string }) => c.closed_date)));
     setAttendance(att || []);
     setLoading(false);
   }, [course.id, selectedYear, selectedMonth]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // 다른 강좌 출석부와 동일하게, 컬럼은 "주" 단위가 아니라 그 달의 평일(월~금) 실제 날짜 단위.
-  // 레슨은 매일 열리고 수강생마다 다니는 요일(주 2~3회 등)이 다르기 때문에, 주 단위로 뭉치면
-  // 어느 요일에 왔는지 정보가 사라짐 — 날짜별 컬럼으로 바꿔서 그 정보를 그대로 보여줌.
-  const monthWeekdays = getWeekdaysOfMonth(selectedYear, selectedMonth);
+  // ===== 출석부 데이터: 회원 1명 = 1줄, 그 회원의 실제 레슨일만 칸으로 =====
+  const memberNameMap = new Map(enrollments.map(e => [e.member_id, e.members?.name || '']));
+  const fixedToMember = new Map(fixedSchedules.map(f => [f.id, f.member_id]));
 
-  // 출석 여부: 이 회원의 (이 강좌) 고정 스케줄 중 하나라도 해당 날짜에 출석 기록이 있으면 출석.
-  // (이번 주만 요일이 바뀐 경우도 실제 출석 체크는 그 바뀐 날짜로 기록되므로 day_of_week를
-  // 다시 따질 필요 없이 attend_date 일치 여부만 보면 됨)
-  function getAttendanceMark(memberId: number, dateStr: string): string {
-    const memberFixedIds = fixedSchedules.filter(f => f.member_id === memberId).map(f => f.id);
-    if (memberFixedIds.length === 0) return '';
-    const found = attendance.some(a =>
-      memberFixedIds.includes(a.fixed_schedule_id) &&
-      a.attend_date === dateStr &&
-      a.is_attended
-    );
-    return found ? '○' : '';
+  const lessonDates = buildMonthlyLessonDates(fixedSchedules, overrides, closedDates, selectedYear, selectedMonth);
+
+  // 회원별 출석한 날짜
+  const attendedByMember = new Map<number, Set<string>>();
+  attendance.forEach(a => {
+    if (!a.is_attended) return;
+    const memberId = a.member_id ?? (a.fixed_schedule_id ? fixedToMember.get(a.fixed_schedule_id) : undefined);
+    if (!memberId) return;
+    if (!attendedByMember.has(memberId)) attendedByMember.set(memberId, new Set());
+    attendedByMember.get(memberId)!.add(a.attend_date);
+  });
+
+  // 명단: 그 달에 레슨 일정이나 출석 기록이 있었던 회원 (종료한 회원 포함)
+  const memberIds = new Set<number>([...Array.from(lessonDates.keys()), ...Array.from(attendedByMember.keys())]);
+  const printRows: PrintRow[] = Array.from(memberIds)
+    .map(memberId => {
+      const scheduled = lessonDates.get(memberId) || [];
+      const attended = attendedByMember.get(memberId) || new Set<string>();
+      // 예정에 없던 날 출석한 기록(보강 등)도 실제 운영 기록이므로 칸으로 함께 표시
+      const allDates = Array.from(new Set([...scheduled, ...Array.from(attended)])).sort();
+      const cells = allDates.map(date => ({ date, attended: attended.has(date) }));
+      return {
+        memberId,
+        name: memberNameMap.get(memberId) || '회원',
+        cells,
+        attendedCount: cells.filter(c => c.attended).length,
+        scheduledCount: cells.length,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+
+  // 페이지 나누기 (12회 초과 회원은 2줄을 차지)
+  const pages: PrintRow[][] = [];
+  {
+    let current: PrintRow[] = [];
+    let lines = 0;
+    printRows.forEach(r => {
+      const need = Math.max(1, Math.ceil(r.cells.length / CELLS_PER_LINE));
+      if (lines + need > LINES_PER_PAGE && current.length > 0) {
+        pages.push(current);
+        current = [];
+        lines = 0;
+      }
+      current.push(r);
+      lines += need;
+    });
+    pages.push(current);
   }
-
-  // 출석부 데이터 준비
-  const sortedEnrollments = [...enrollments]
-    .sort((a, b) => (a.members?.name || '').localeCompare(b.members?.name || '', 'ko'));
-
-  const studentsPerPage = 15;
-  const datesPerPage = 10;
-  const studentPages = Math.max(1, Math.ceil(sortedEnrollments.length / studentsPerPage));
-  const datePages = Math.max(1, Math.ceil(monthWeekdays.length / datesPerPage));
-  const totalPages = studentPages * datePages;
+  const totalPages = pages.length;
+  const totalAttended = printRows.reduce((s, r) => s + r.attendedCount, 0);
+  const totalScheduled = printRows.reduce((s, r) => s + r.scheduledCount, 0);
+  const realCount = printRows.filter(r => r.attendedCount > 0).length;
 
   // 주간 스케줄표 데이터: 요일×시간 정렬
   // (출석부 모드와 달리 이건 "지금 벽에 붙여두는 현재 스케줄표"이므로, 영구 변경으로
@@ -137,12 +199,11 @@ export default function LessonPrintClient({
     scheduleByDay[Number(k)].sort((a, b) => a.start_time.localeCompare(b.start_time));
   });
 
-  const memberNameMap = new Map(enrollments.map(e => [e.member_id, e.members?.name || '']));
   const maxRows = Math.max(...Object.values(scheduleByDay).map(arr => arr.length), 1);
 
   const printStyle = `
     @media print {
-      @page { size: A4 portrait; margin: 8mm 10mm; }
+      @page { size: A4 ${printMode === 'attendance' ? 'landscape' : 'portrait'}; margin: 8mm 10mm; }
       html, body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       .no-print { display: none !important; }
       .print-only { display: block !important; }
@@ -182,11 +243,11 @@ export default function LessonPrintClient({
         </div>
 
         {/* 연/월 선택 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
           <button onClick={() => setSelectedYear(y => y - 1)} style={navBtn}>◀</button>
           <strong style={{ minWidth: 56, textAlign: 'center' }}>{selectedYear}년</strong>
           <button onClick={() => setSelectedYear(y => y + 1)} style={navBtn}>▶</button>
-          <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
+          <div style={{ display: 'flex', gap: 4, marginLeft: 8, flexWrap: 'wrap' }}>
             {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
               <button key={m} onClick={() => setSelectedMonth(m)} style={{
                 padding: '6px 10px', borderRadius: 5, cursor: 'pointer', fontSize: 13,
@@ -213,126 +274,108 @@ export default function LessonPrintClient({
 
         <div style={{ fontSize: 12, color: '#888', marginBottom: 20 }}>
           {printMode === 'attendance'
-            ? `총 ${totalPages}페이지 · 수강생 ${sortedEnrollments.length}명 · ${monthWeekdays.length}일`
+            ? `A4 가로 ${totalPages}페이지 · 수강생 ${printRows.length}명 · 출석 ${totalAttended}회 / 예정 ${totalScheduled}회`
             : `A4 1페이지 · 요일별 레슨 시간표`}
+          {printMode === 'attendance' && (
+            <div style={{ marginTop: 4 }}>
+              토·일요일, 공휴일, 주간 스케줄에서 &apos;휴무&apos;로 체크한 날, &apos;이번 주 취소&apos;한 레슨은 칸에서 빠집니다.
+            </div>
+          )}
         </div>
+
+        {/* 화면 미리보기 (출석부) */}
+        {printMode === 'attendance' && !loading && (
+          <div style={{ border: '1px solid #eee', borderRadius: 8, padding: 12, marginBottom: 20, overflowX: 'auto' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>미리보기</div>
+            {printRows.length === 0 ? (
+              <div style={{ fontSize: 13, color: '#888', padding: 20, textAlign: 'center' }}>이 달에는 레슨 일정이 없습니다.</div>
+            ) : (
+              <AttendanceTable rows={printRows} startSeq={1} />
+            )}
+          </div>
+        )}
       </div>
 
       {/* ===== 출석부 인쇄 영역 ===== */}
       {printMode === 'attendance' && (
         <div className="print-only" style={{ display: 'none' }}>
-          {loading ? null : (
-            Array.from({ length: datePages }).flatMap((_, dpIdx) =>
-              Array.from({ length: studentPages }).map((_, sIdx) => {
-                const dateSlice = monthWeekdays.slice(dpIdx * datesPerPage, (dpIdx + 1) * datesPerPage);
-                const studentSlice = sortedEnrollments.slice(sIdx * studentsPerPage, (sIdx + 1) * studentsPerPage);
-                const pageNum = dpIdx * studentPages + sIdx + 1;
-
-                // 10칸 맞추기
-                const dateCols = [...dateSlice];
-                while (dateCols.length < 10) dateCols.push(null as any);
-                // 15명 맞추기
-                const studentRows = [...studentSlice];
-                while (studentRows.length < 15) studentRows.push(null as any);
-
-                return (
-                  <div key={`${dpIdx}-${sIdx}`} className="print-page" style={{
-                    pageBreakAfter: 'always', padding: '8px 24px',
-                    fontFamily: 'sans-serif', color: '#000', background: 'white',
-                  }}>
-                    {/* 헤더 */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-                      <div style={{ flex: 1 }}></div>
-                      <div style={{ flex: 2, textAlign: 'center' }}>
-                        <h1 style={{ fontSize: 18, margin: 0, fontWeight: 'bold' }}>{selectedYear}년 중림종합사회복지관</h1>
-                        <h1 style={{ fontSize: 18, margin: '4px 0 0', fontWeight: 'bold' }}>늘품학습센터 출석부</h1>
-                      </div>
-                      <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
-                        <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
-                          <tbody>
-                            <tr>
-                              <td rowSpan={2} style={{ border: '1px solid black', padding: '4px 6px', textAlign: 'center', width: 20, writingMode: 'vertical-rl', verticalAlign: 'middle' }}>결재</td>
-                              <td style={{ border: '1px solid black', padding: '4px 12px', textAlign: 'center', width: 50 }}>담 당</td>
-                              <td style={{ border: '1px solid black', padding: '4px 12px', textAlign: 'center', width: 50 }}>과 장</td>
-                            </tr>
-                            <tr>
-                              <td style={{ border: '1px solid black', padding: '4px 12px', height: 30 }}></td>
-                              <td style={{ border: '1px solid black', padding: '4px 12px', height: 30, fontSize: 10, textAlign: 'center' }}>전결</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    {/* 강좌/강사 */}
-                    <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16, fontSize: 12 }}>
+          {loading ? null : pages.map((pageRows, pIdx) => {
+            const startSeq = pages.slice(0, pIdx).reduce((s, p) => s + p.length, 0) + 1;
+            const isLast = pIdx === pages.length - 1;
+            return (
+              <div key={pIdx} className="print-page" style={{
+                padding: '4px 12px', fontFamily: 'sans-serif', color: '#000', background: 'white',
+              }}>
+                {/* 헤더: 제목 + 결재란 */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                  <div style={{ flex: 1.5 }}></div>
+                  <div style={{ flex: 2, textAlign: 'center' }}>
+                    <h1 style={{ fontSize: 17, margin: 0, fontWeight: 'bold' }}>{selectedYear}년 중림종합사회복지관</h1>
+                    <h1 style={{ fontSize: 18, margin: '4px 0 0', fontWeight: 'bold' }}>늘품학습센터 {selectedMonth}월 레슨 출석부</h1>
+                  </div>
+                  <div style={{ flex: 1.5, display: 'flex', justifyContent: 'flex-end' }}>
+                    <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
                       <tbody>
                         <tr>
-                          <td style={{ border: '1px solid black', padding: '6px 10px', background: '#e0e0e0', width: 80, textAlign: 'center' }}>강좌명</td>
-                          <td style={{ border: '1px solid black', padding: '6px 10px', width: '40%' }}>{course.name}</td>
-                          <td style={{ border: '1px solid black', padding: '6px 10px', background: '#e0e0e0', width: 80, textAlign: 'center' }}>강사명</td>
-                          <td style={{ border: '1px solid black', padding: '6px 10px' }}>{instructorName}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-
-                    {/* 출석 표 */}
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                      <thead>
-                        <tr>
-                          <th style={{ border: '1px solid black', padding: 4, width: 40, background: '#e0e0e0' }}>연번</th>
-                          <th style={{ border: '1px solid black', padding: 4, width: 90, background: '#e0e0e0' }}>성명</th>
-                          {dateCols.map((d, idx) => (
-                            <th key={idx} style={{ border: '1px solid black', padding: 4, background: '#e0e0e0', minWidth: 40, textAlign: 'center' }}>
-                              {idx + dpIdx * datesPerPage + 1}
-                              <div style={{ fontSize: 9, marginTop: 2 }}>
-                                {d ? `${d.getMonth() + 1}/${d.getDate()}` : '/'}
-                              </div>
-                            </th>
+                          <td rowSpan={2} style={{ border: '1px solid black', padding: '4px 6px', textAlign: 'center', width: 20, writingMode: 'vertical-rl', verticalAlign: 'middle' }}>결재</td>
+                          {approvalLine.titles.map((t, i) => (
+                            <td key={i} style={{ border: '1px solid black', padding: '4px 10px', textAlign: 'center', width: 46 }}>
+                              {t.length === 2 ? `${t[0]} ${t[1]}` : t}
+                            </td>
                           ))}
                         </tr>
-                      </thead>
-                      <tbody>
-                        {studentRows.map((e, rIdx) => (
-                          <tr key={rIdx}>
-                            <td style={{ border: '1px solid black', padding: 4, textAlign: 'center', height: 24 }}>{rIdx + sIdx * studentsPerPage + 1}</td>
-                            <td style={{ border: '1px solid black', padding: 4 }}>{e?.members?.name || ''}</td>
-                            {dateCols.map((d, cIdx) => (
-                              <td key={cIdx} style={{ border: '1px solid black', padding: 4, textAlign: 'center' }}>
-                                {e && d ? getAttendanceMark(e.member_id, ymd(d)) : ''}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                        {/* 일계 */}
                         <tr>
-                          <td colSpan={2} style={{ border: '1px solid black', padding: 4, textAlign: 'center', background: '#e0e0e0', fontWeight: 'bold' }}>일계</td>
-                          {dateCols.map((d, cIdx) => {
-                            const count = d
-                              ? studentSlice.filter(e => getAttendanceMark(e.member_id, ymd(d)) === '○').length
-                              : '';
-                            return (
-                              <td key={cIdx} style={{ border: '1px solid black', padding: 4, textAlign: 'center', background: '#f8f8f8' }}>
-                                {count}
-                              </td>
-                            );
-                          })}
+                          {approvalLine.titles.map((_, i) => (
+                            <td key={i} style={{ border: '1px solid black', padding: '4px 10px', height: 28, fontSize: 10, textAlign: 'center' }}>
+                              {approvalLine.finalIndex === i ? '전결' : ''}
+                            </td>
+                          ))}
                         </tr>
                       </tbody>
                     </table>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, fontSize: 11 }}>
-                      <span>계속( {pageNum} / {totalPages} )</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 10 }}>중구 구립·대한불교조계종사회복지재단 운영</span>
-                        <strong style={{ fontSize: 13, color: '#d97706' }}>중림종합사회복지관</strong>
-                      </div>
-                    </div>
                   </div>
-                );
-              })
-            )
-          )}
+                </div>
+
+                {/* 강좌/강사 */}
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 8, fontSize: 12 }}>
+                  <tbody>
+                    <tr>
+                      <td style={{ border: '1px solid black', padding: '5px 10px', background: '#e0e0e0', width: 80, textAlign: 'center' }}>강좌명</td>
+                      <td style={{ border: '1px solid black', padding: '5px 10px', width: '40%' }}>{course.name}</td>
+                      <td style={{ border: '1px solid black', padding: '5px 10px', background: '#e0e0e0', width: 80, textAlign: 'center' }}>강사명</td>
+                      <td style={{ border: '1px solid black', padding: '5px 10px' }}>{instructorName}</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <AttendanceTable rows={pageRows} startSeq={startSeq} />
+
+                {/* 마지막 페이지에 월 합계 */}
+                {isLast && (
+                  <table style={{ borderCollapse: 'collapse', fontSize: 12, marginTop: 8, marginLeft: 'auto' }}>
+                    <tbody>
+                      <tr>
+                        <td style={sumLabel}>실인원</td>
+                        <td style={sumValue}>{realCount}명</td>
+                        <td style={sumLabel}>연인원(출석)</td>
+                        <td style={sumValue}>{totalAttended}회</td>
+                        <td style={sumLabel}>예정 레슨</td>
+                        <td style={sumValue}>{totalScheduled}회</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, fontSize: 11 }}>
+                  <span>계속( {pIdx + 1} / {totalPages} )</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 10 }}>중구 구립·대한불교조계종사회복지재단 운영</span>
+                    <strong style={{ fontSize: 13, color: '#d97706' }}>중림종합사회복지관</strong>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -393,4 +436,73 @@ export default function LessonPrintClient({
 const navBtn: React.CSSProperties = {
   width: 28, height: 28, borderRadius: 5, border: '1px solid #ddd',
   background: 'white', cursor: 'pointer', fontSize: 14, color: '#555',
+};
+
+// 회원별 한 줄 출석표: 위 칸 = 레슨 날짜, 아래 칸 = 출석(○)
+function AttendanceTable({ rows, startSeq }: { rows: PrintRow[]; startSeq: number }) {
+  const border = '1px solid black';
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, tableLayout: 'fixed' }}>
+      <colgroup>
+        <col style={{ width: 34 }} />
+        <col style={{ width: 76 }} />
+        {Array.from({ length: CELLS_PER_LINE }).map((_, i) => <col key={i} />)}
+        <col style={{ width: 62 }} />
+      </colgroup>
+      <thead>
+        <tr>
+          <th style={{ border, padding: 3, background: '#e0e0e0' }}>연번</th>
+          <th style={{ border, padding: 3, background: '#e0e0e0' }}>성명</th>
+          {Array.from({ length: CELLS_PER_LINE }).map((_, i) => (
+            <th key={i} style={{ border, padding: 3, background: '#e0e0e0', fontWeight: 600 }}>{i + 1}회</th>
+          ))}
+          <th style={{ border, padding: 3, background: '#e0e0e0' }}>출석/예정</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, rIdx) => {
+          const lines = chunk(r.cells, CELLS_PER_LINE);
+          const span = lines.length * 2;
+          return lines.flatMap((lineCells, lIdx) => {
+            const padded: ({ date: string; attended: boolean } | null)[] = [...lineCells];
+            while (padded.length < CELLS_PER_LINE) padded.push(null);
+            return [
+              <tr key={`${r.memberId}-${lIdx}-d`}>
+                {lIdx === 0 && (
+                  <>
+                    <td rowSpan={span} style={{ border, padding: 3, textAlign: 'center' }}>{startSeq + rIdx}</td>
+                    <td rowSpan={span} style={{ border, padding: '3px 5px', fontWeight: 600 }}>{r.name}</td>
+                  </>
+                )}
+                {padded.map((c, cIdx) => (
+                  <td key={cIdx} style={{ border, borderBottom: '1px dotted #888', padding: '1px 2px', textAlign: 'center', fontSize: 10, color: '#333', background: '#f5f5f5', height: 14 }}>
+                    {c ? shortDate(c.date) : ''}
+                  </td>
+                ))}
+                {lIdx === 0 && (
+                  <td rowSpan={span} style={{ border, padding: 3, textAlign: 'center', fontWeight: 600 }}>
+                    {r.attendedCount} / {r.scheduledCount}
+                  </td>
+                )}
+              </tr>,
+              <tr key={`${r.memberId}-${lIdx}-m`}>
+                {padded.map((c, cIdx) => (
+                  <td key={cIdx} style={{ border, borderTop: 'none', padding: '1px 2px', textAlign: 'center', fontSize: 13, height: 18 }}>
+                    {c && c.attended ? '○' : ''}
+                  </td>
+                ))}
+              </tr>,
+            ];
+          });
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+const sumLabel: React.CSSProperties = {
+  border: '1px solid black', padding: '4px 10px', background: '#e0e0e0', textAlign: 'center',
+};
+const sumValue: React.CSSProperties = {
+  border: '1px solid black', padding: '4px 14px', textAlign: 'center', fontWeight: 600,
 };

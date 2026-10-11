@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { formatTime12 } from '@/lib/time';
+import { buildMonthlyLessonDates, mondaysOverlappingMonth, type MonthOverride } from '@/lib/lessonMonth';
 
 type Course = { id: number; name: string; category: string };
 type Member = { id: number; name: string; phone: string | null; is_discount_50: boolean; is_discount_100: boolean };
@@ -49,18 +50,6 @@ function fmtWeekLabel(monday: Date): string {
 function minStr(a: string, b: string): string { return a < b ? a : b; }
 function maxStr(a: string, b: string): string { return a > b ? a : b; }
 
-// 해당 월의 평일(월~금) 날짜 목록
-function getWeekdaysOfMonth(year: number, month: number): Date[] {
-  const result: Date[] = [];
-  const lastDay = new Date(year, month, 0).getDate();
-  for (let day = 1; day <= lastDay; day++) {
-    const d = new Date(year, month - 1, day);
-    const dow = d.getDay();
-    if (dow >= 1 && dow <= 5) result.push(d);
-  }
-  return result;
-}
-
 type StudentRow = {
   memberId: number;
   memberName: string;
@@ -83,6 +72,8 @@ export default function StudentsClient({
   const [weekStart, setWeekStart] = useState<Date>(() => getMonday(today));
   const [fixedSchedules, setFixedSchedules] = useState<FixedSchedule[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [overrides, setOverrides] = useState<MonthOverride[]>([]);
+  const [closedDates, setClosedDates] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   const weekDates = [0, 1, 2, 3, 4].map(i => addDays(weekStart, i));
@@ -103,7 +94,8 @@ export default function StudentsClient({
     const rangeStart = minStr(monthStart, ymd(weekDates[0]));
     const rangeEnd = maxStr(monthEnd, ymd(weekDates[4]));
 
-    const [{ data: fixed }, { data: att }] = await Promise.all([
+    const weeks = mondaysOverlappingMonth(rateYear, rateMonth);
+    const [{ data: fixed }, { data: att }, { data: ovr }, { data: closed }] = await Promise.all([
       supabase
         .from('lesson_fixed_schedules')
         .select('*')
@@ -115,10 +107,25 @@ export default function StudentsClient({
         .eq('course_id', course.id)
         .gte('attend_date', rangeStart)
         .lte('attend_date', rangeEnd),
+      // 출석률 계산용: '이번 주만 변경/취소'와 강사가 체크한 휴무일 반영 (출력 출석부와 같은 기준)
+      supabase
+        .from('lesson_schedules')
+        .select('fixed_schedule_id, week_start, schedule_date, is_cancelled')
+        .eq('course_id', course.id)
+        .gte('week_start', weeks[0])
+        .lte('week_start', weeks[weeks.length - 1]),
+      supabase
+        .from('lesson_closed_days')
+        .select('closed_date')
+        .eq('course_id', course.id)
+        .gte('closed_date', monthStart)
+        .lte('closed_date', monthEnd),
     ]);
 
     setFixedSchedules(fixed || []);
     setAttendance(att || []);
+    setOverrides(ovr || []);
+    setClosedDates(new Set((closed || []).map((c: { closed_date: string }) => c.closed_date)));
     setLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [course.id, ymd(weekStart)]);
@@ -130,7 +137,8 @@ export default function StudentsClient({
   function thisWeek() { setWeekStart(getMonday(today)); }
   const isThisWeek = ymd(weekStart) === ymd(getMonday(today));
 
-  const monthWeekdays = getWeekdaysOfMonth(rateYear, rateMonth);
+  // 회원별 그 달 레슨 예정일 (주말·공휴일·휴무일·이번 주 취소 제외, 이번 주 변경 반영)
+  const monthLessonDates = buildMonthlyLessonDates(fixedSchedules, overrides, closedDates, rateYear, rateMonth);
 
   const rows: StudentRow[] = enrollments
     .filter(e => e.members)
@@ -147,19 +155,7 @@ export default function StudentsClient({
       });
 
       // 이번 주가 속한 달 기준 출석률
-      const scheduledDates = new Set<string>();
-      monthWeekdays.forEach(d => {
-        const scheduleDow = d.getDay() - 1; // 0=월~4=금
-        const dateStr = ymd(d);
-        // 그 날짜에 실제로 유효했던 고정 스케줄만 대상으로 함
-        // (영구 변경으로 이미 대체된 예전 스케줄은 effective_until 이후 날짜에서 제외)
-        const applicable = memberFixed.some(f =>
-          f.day_of_week === scheduleDow &&
-          f.effective_from <= dateStr &&
-          (!f.effective_until || dateStr <= f.effective_until)
-        );
-        if (applicable) scheduledDates.add(dateStr);
-      });
+      const scheduledDates = new Set<string>(monthLessonDates.get(member.id) || []);
       const attendedDates = new Set<string>();
       attendance.forEach(a => {
         if (fixedIds.includes(a.fixed_schedule_id) && a.is_attended) {
@@ -168,6 +164,8 @@ export default function StudentsClient({
           if (inMonth) attendedDates.add(a.attend_date);
         }
       });
+      // 예정에 없던 날 출석(보강 등)도 레슨한 날로 보고 분모에 포함 (출력 출석부의 '출석/예정'과 같은 기준)
+      attendedDates.forEach(d => scheduledDates.add(d));
       const rate = scheduledDates.size > 0 ? Math.round((attendedDates.size / scheduledDates.size) * 100) : 0;
 
       // 화면에 표시할 스케줄 요약은 "지금 보고 있는 주"에 실제로 유효한 것만 (예전에 영구 변경으로

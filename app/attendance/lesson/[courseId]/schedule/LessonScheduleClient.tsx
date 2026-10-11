@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { formatTime12, hourLabel12 } from '@/lib/time';
+import { getHolidayName } from '@/lib/holidays';
 
 type Course = {
   id: number;
@@ -112,6 +113,9 @@ export default function LessonScheduleClient({
   const [weekStart, setWeekStart] = useState<Date>(() => getMonday(today));
   const [fixedSchedules, setFixedSchedules] = useState<FixedSchedule[]>([]);
   const [overrides, setOverrides] = useState<OverrideSchedule[]>([]);
+  // 강사가 체크한 휴무일 (이 강좌, 이번 주 범위). 출력 출석부·출석률 계산에서 제외됨
+  const [closedDates, setClosedDates] = useState<Set<string>>(new Set());
+  const [togglingClosed, setTogglingClosed] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // 모달
@@ -132,7 +136,8 @@ export default function LessonScheduleClient({
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [{ data: fixed }, { data: ovr }] = await Promise.all([
+    const weekEndStr = ymd(addDays(weekStart, 6));
+    const [{ data: fixed }, { data: ovr }, { data: closed }] = await Promise.all([
       supabase
         .from('lesson_fixed_schedules')
         .select('*')
@@ -148,9 +153,16 @@ export default function LessonScheduleClient({
         .select('*')
         .eq('course_id', course.id)
         .eq('week_start', weekStartStr),
+      supabase
+        .from('lesson_closed_days')
+        .select('closed_date')
+        .eq('course_id', course.id)
+        .gte('closed_date', weekStartStr)
+        .lte('closed_date', weekEndStr),
     ]);
     setFixedSchedules(fixed || []);
     setOverrides(ovr || []);
+    setClosedDates(new Set((closed || []).map((c: { closed_date: string }) => c.closed_date)));
     setLoading(false);
   }, [course.id, weekStartStr]);
 
@@ -428,6 +440,33 @@ export default function LessonScheduleClient({
 
   const isThisWeek = ymd(weekStart) === ymd(getMonday(today));
 
+  // 휴무일 지정/해제 (공휴일은 자동 휴무라 따로 지정할 필요 없음)
+  async function toggleClosedDay(dateStr: string) {
+    if (togglingClosed) return;
+    const isClosed = closedDates.has(dateStr);
+    const label = `${parseInt(dateStr.substring(5, 7), 10)}월 ${parseInt(dateStr.substring(8, 10), 10)}일`;
+    if (!confirm(isClosed
+      ? `${label} 휴무를 해제하시겠습니까?\n(다시 레슨일로 계산됩니다)`
+      : `${label}을(를) 휴무일로 지정하시겠습니까?\n\n이 날 레슨은 출력 출석부와 출석률 계산에서 빠집니다.`)) return;
+    setTogglingClosed(dateStr);
+    const { error } = isClosed
+      ? await supabase.from('lesson_closed_days').delete().eq('course_id', course.id).eq('closed_date', dateStr)
+      : await supabase.from('lesson_closed_days').insert({ course_id: course.id, closed_date: dateStr });
+    setTogglingClosed(null);
+    if (error) { alert('저장 실패: ' + error.message); return; }
+    setClosedDates(prev => {
+      const next = new Set(prev);
+      if (isClosed) next.delete(dateStr); else next.add(dateStr);
+      return next;
+    });
+  }
+
+  // 요일 칸이 쉬는 날인지 (공휴일 이름 또는 '휴무'), 아니면 null
+  function offLabel(di: number): string | null {
+    const dateStr = ymd(addDays(weekStart, di));
+    return getHolidayName(dateStr) || (closedDates.has(dateStr) ? '휴무' : null);
+  }
+
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '20px 16px' }}>
       <Link href={`/attendance/lesson/${course.id}`} style={{ color: '#666', fontSize: 13, textDecoration: 'none' }}>
@@ -455,6 +494,9 @@ export default function LessonScheduleClient({
           <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#e0e0e0', marginRight: 4 }}></span>이번주취소</span>
         </div>
       </div>
+      <div style={{ fontSize: 12, color: '#888', margin: '-8px 0 12px' }}>
+        쉬는 날은 날짜 아래 <b>[휴무 지정]</b>을 눌러 체크하세요. 공휴일은 자동으로 휴무 처리됩니다.
+      </div>
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: '#888' }}>불러오는 중...</div>
@@ -471,9 +513,13 @@ export default function LessonScheduleClient({
                 {DAYS.map((day, di) => {
                   const d = addDays(weekStart, di);
                   const isToday = ymd(d) === ymd(today);
+                  const dStr = ymd(d);
+                  const holiday = getHolidayName(dStr);
+                  const isClosed = closedDates.has(dStr);
                   return (
                     <th key={day} style={{
                       ...thStyle,
+                      background: holiday || isClosed ? '#ececec' : thStyle.background,
                       color: isToday ? '#185FA5' : 'inherit',
                       borderBottom: isToday ? '2px solid #185FA5' : thStyle.borderBottom,
                     }}>
@@ -481,6 +527,24 @@ export default function LessonScheduleClient({
                       <span style={{ fontSize: 11, fontWeight: 400, color: isToday ? '#185FA5' : '#888' }}>
                         {(d.getMonth() + 1)}/{d.getDate()}
                       </span>
+                      <div style={{ marginTop: 3 }}>
+                        {holiday ? (
+                          <span style={{ fontSize: 10, fontWeight: 600, color: '#c0392b' }}>{holiday}</span>
+                        ) : (
+                          <button
+                            onClick={() => toggleClosedDay(dStr)}
+                            disabled={togglingClosed === dStr}
+                            style={{
+                              fontSize: 10, padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
+                              border: `1px solid ${isClosed ? '#c0392b' : '#ccc'}`,
+                              background: isClosed ? '#c0392b' : 'white',
+                              color: isClosed ? 'white' : '#888',
+                            }}
+                          >
+                            {isClosed ? '휴무 (해제)' : '휴무 지정'}
+                          </button>
+                        )}
+                      </div>
                     </th>
                   );
                 })}
@@ -511,8 +575,9 @@ export default function LessonScheduleClient({
                     <td style={{ ...tdTimeStyle, whiteSpace: 'normal', lineHeight: 1.3 }}>{hl.period}<br />{hl.text}</td>
                     {DAYS.map((_, di) => {
                       const slots = slotsInHour(di);
+                      const isOff = !!offLabel(di);
                       return (
-                        <td key={di} style={tdCellStyle}>
+                        <td key={di} style={{ ...tdCellStyle, background: isOff ? '#f0f0f0' : tdCellStyle.background, opacity: isOff ? 0.55 : 1 }}>
                           {slots.map((s, si) => {
                             const name = memberNameMap.get(s.memberId) || '회원';
                             const isCancelled = s.type === 'cancelled';

@@ -2,6 +2,7 @@ import { redirect, notFound } from 'next/navigation';
 import { getCurrentStaff } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
 import TopBar from '@/components/TopBar';
+import { APPROVAL_LINE_KEY, normalizeApprovalLine } from '@/lib/approvalLine';
 import LessonPrintClient from './LessonPrintClient';
 
 export default async function LessonPrintPage({ params }: { params: { courseId: string } }) {
@@ -32,11 +33,23 @@ export default async function LessonPrintPage({ params }: { params: { courseId: 
   }
 
   // 수강생 목록
+  // 지난달 출석부를 다시 출력할 때 그 사이 종료한 회원도 이름이 나와야 하므로 ended까지 포함.
+  // (실제 명단은 "그 달에 레슨 일정이나 출석이 있었던 회원"으로 화면에서 걸러짐)
   const { data: enrollmentsRaw } = await supabase
     .from('enrollments')
     .select('id, member_id, status, members(id, name, phone)')
     .eq('course_id', courseId)
-    .in('status', ['active', 'paused']);
+    .in('status', ['active', 'paused', 'ended']);
+
+  // 결재라인 설정 (일반 강좌 출석부와 같은 설정을 사용)
+  let approvalValue: unknown = null;
+  try {
+    const { data } = await supabase.from('app_settings').select('value').eq('key', APPROVAL_LINE_KEY).maybeSingle();
+    approvalValue = data?.value ?? null;
+  } catch {
+    approvalValue = null;
+  }
+  const approvalLine = normalizeApprovalLine(approvalValue);
 
   const enrollments = (enrollmentsRaw || []).map((e: any) => ({
     id: e.id,
@@ -52,6 +65,7 @@ export default async function LessonPrintPage({ params }: { params: { courseId: 
         course={course as any}
         instructorName={instructorName}
         enrollments={enrollments as any}
+        approvalLine={approvalLine}
       />
     </div>
   );
