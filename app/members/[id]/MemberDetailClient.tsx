@@ -742,7 +742,7 @@ export default function MemberDetailClient({
         payment_month: thisMonthPayment!.payment_month,
         amount: 0,
         is_paid: true,
-        paid_at: new Date().toISOString(),
+        paid_at: getTodayKST(), // 한국 날짜 (UTC 기준이면 오전 9시 전 처리 시 전날로 기록됨)
         payment_method: null,
         status_type: 'transferred',
         memo: `수강변경 대체 (${oldCourseName} ${thisMonthPayment!.payment_year}년 ${thisMonthPayment!.payment_month}월분)`,

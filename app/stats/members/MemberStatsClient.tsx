@@ -103,6 +103,8 @@ export default function MemberStatsClient() {
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [courseDates, setCourseDates] = useState<CourseDate[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRow[]>([]);
+  // 레슨 강좌(피아노 등)는 lesson_attendance로 출석을 관리하므로 활동 회원 계산에 따로 포함
+  const [lessonAtt, setLessonAtt] = useState<{ member_id: number; attend_date: string }[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -121,7 +123,7 @@ export default function MemberStatsClient() {
     const last = monthBounds(months[months.length - 1].y, months[months.length - 1].m);
 
     // 회원/출석 데이터가 1000행을 넘을 수 있어 전부 페이지 단위로 끝까지 가져옴
-    const [mRes, eRes, dRes] = await Promise.all([
+    const [mRes, eRes, dRes, laRes] = await Promise.all([
       fetchAllRows<Member>((from, to) =>
         supabase
           .from('members')
@@ -133,6 +135,10 @@ export default function MemberStatsClient() {
       ),
       fetchAllRows<CourseDate>((from, to) =>
         supabase.from('course_dates').select('id, class_date').gte('class_date', first.start).lte('class_date', last.end).range(from, to)
+      ),
+      fetchAllRows<{ member_id: number; attend_date: string }>((from, to) =>
+        supabase.from('lesson_attendance').select('member_id, attend_date')
+          .eq('is_attended', true).gte('attend_date', first.start).lte('attend_date', last.end).range(from, to)
       ),
     ]);
 
@@ -157,6 +163,7 @@ export default function MemberStatsClient() {
     setEnrollments((eRes.data || []) as Enrollment[]);
     setCourseDates((dRes.data || []) as CourseDate[]);
     setAttendance(allAtt);
+    setLessonAtt(laRes.data || []);
     setLoading(false);
   }
 
@@ -188,6 +195,11 @@ export default function MemberStatsClient() {
       if (!activeByMonth.has(monthKey)) activeByMonth.set(monthKey, new Set());
       activeByMonth.get(monthKey)!.add(memberId);
     });
+    lessonAtt.forEach(a => {
+      const monthKey = `${parseInt(a.attend_date.substring(0, 4), 10)}-${parseInt(a.attend_date.substring(5, 7), 10)}`;
+      if (!activeByMonth.has(monthKey)) activeByMonth.set(monthKey, new Set());
+      activeByMonth.get(monthKey)!.add(a.member_id);
+    });
 
     const trends = new Map<string, MonthlyTrend>();
     months.forEach(({ y, m }) => {
@@ -212,7 +224,7 @@ export default function MemberStatsClient() {
     });
 
     return trends;
-  }, [members, enrollments, courseDates, attendance, months]);
+  }, [members, enrollments, courseDates, attendance, lessonAtt, months]);
 
   // 현재 시점 분포 (조회 기간 마지막 월 말 기준)
   const distributions = useMemo(() => {

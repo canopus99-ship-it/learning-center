@@ -27,10 +27,10 @@ export default async function LessonSchedulePage({ params }: { params: { courseI
   // 이 강좌의 수강생 (enrollment + member)
   const { data: enrollmentsRaw } = await supabase
     .from('enrollments')
-    .select('id, member_id, status, end_date, members(id, name, phone)')
+    .select('id, member_id, status, end_date, carryover_date, members(id, name, phone)')
     .eq('course_id', courseId)
     // 종료한 회원도 함께 가져와서, 종료일 전까지의 레슨은 보이고 종료일부터는 자동으로 빠지게 함
-    .in('status', ['active', 'paused', 'ended']);
+    .in('status', ['active', 'paused', 'ended', 'waiting']);
 
   // Supabase 관계 조회는 members를 배열로 반환할 수 있어 단일 객체로 정규화
   const enrollments = (enrollmentsRaw || []).map((e: any) => ({
@@ -38,6 +38,7 @@ export default async function LessonSchedulePage({ params }: { params: { courseI
     member_id: e.member_id,
     status: e.status,
     end_date: e.end_date || null,
+    carryover_date: e.carryover_date || null,
     members: Array.isArray(e.members) ? (e.members[0] || null) : (e.members || null),
   }));
 

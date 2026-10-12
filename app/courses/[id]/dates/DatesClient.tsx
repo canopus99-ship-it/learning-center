@@ -64,6 +64,17 @@ export default function DatesClient({
     const action = d.is_cancelled ? '복원' : '휴강';
     let memo = d.memo || '';
     if (!d.is_cancelled) {
+      // 출석 기록이 있는 날은 휴강으로 바꿀 수 없음 (화면마다 출석 집계가 달라지는 것을 막기 위함:
+      // 출석부 화면은 휴강일 출석을 0으로, 통계·강사료는 출석 기록대로 셈)
+      const { count } = await supabase
+        .from('attendance')
+        .select('course_date_id', { count: 'exact', head: true })
+        .eq('course_date_id', d.id)
+        .eq('is_present', true);
+      if ((count || 0) > 0) {
+        alert(`이 날은 출석 기록이 ${count}건 있어 휴강으로 바꿀 수 없습니다.\n실제로 휴강했다면 출석부에서 그날 출석 체크를 먼저 해제해 주세요.`);
+        return;
+      }
       const userMemo = prompt('휴강 사유 (선택사항):', '');
       if (userMemo === null) return; // 취소
       memo = userMemo;

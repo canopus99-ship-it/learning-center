@@ -42,7 +42,9 @@ export async function middleware(request: NextRequest) {
   }
 
   // 로그인했는데 로그인 페이지 접근 시도 → 홈으로
-  if (user && path === '/login') {
+  // 단, 직원 명단에 없는 계정이라 '/login?error=no_access'로 보내진 경우는 그대로 두어야 함
+  // (홈 → 로그인 → 홈 … 무한 이동으로 화면이 멈추던 문제)
+  if (user && path === '/login' && request.nextUrl.searchParams.get('error') !== 'no_access') {
     const url = request.nextUrl.clone();
     url.pathname = '/';
     return NextResponse.redirect(url);

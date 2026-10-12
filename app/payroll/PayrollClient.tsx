@@ -118,9 +118,15 @@ export default function PayrollClient() {
     const monthEnd = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
 
     const [cRes, iRes, dRes] = await Promise.all([
-      supabase.from('courses').select('*').eq('is_active', true).order('category').order('name'),
+      // 비활성 강좌도 불러옴: 지난달 강사료를 뽑기 전에 강좌를 비활성으로 바꿔도 그 달 출석이 있으면 포함되도록
+      // (활성 여부 판단은 아래 payrollItems에서)
+      supabase.from('courses').select('*').order('category').order('name'),
       supabase.from('instructors').select('*').order('name'),
-      supabase.from('course_dates').select('*').gte('class_date', monthStart).lt('class_date', monthEnd).order('class_date'),
+      // 강좌가 많아지면 한 달 수업일이 1000행을 넘을 수 있어 끝까지 가져옴 (넘으면 월말 수업일이 조용히 빠짐)
+      fetchAllRows<CourseDate>((from, to) =>
+        supabase.from('course_dates').select('*').gte('class_date', monthStart).lt('class_date', monthEnd)
+          .order('class_date').order('id').range(from, to)
+      ),
     ]);
 
     const dates = (dRes.data || []) as CourseDate[];
@@ -241,6 +247,13 @@ export default function PayrollClient() {
         ? lessonAttendance.some(a => a.course_id === course.id)
         : courseDates.some(d => d.course_id === course.id);
       if (!hasDates) return;
+      // 비활성 강좌는 그 달 실제 출석이 있을 때만 포함
+      if (!course.is_active) {
+        const hadAttendance = course.is_lesson
+          ? lessonAttendance.some(a => a.course_id === course.id)
+          : courseDates.some(d => d.course_id === course.id && datesWithAttendance.has(d.id));
+        if (!hadAttendance) return;
+      }
 
       const main = instructors.find(i => i.id === course.instructor_id);
       if (main) items.push({ key: `${course.id}-main`, course, instructor: main, role: 'main' });

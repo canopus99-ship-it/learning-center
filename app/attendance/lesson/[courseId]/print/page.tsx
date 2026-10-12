@@ -41,9 +41,9 @@ export default async function LessonPrintPage({ params }: { params: { courseId: 
   // (실제 명단은 "그 달에 레슨 일정이나 출석이 있었던 회원"으로 화면에서 걸러짐)
   const { data: enrollmentsRaw } = await supabase
     .from('enrollments')
-    .select('id, member_id, status, end_date, members(id, name, phone)')
+    .select('id, member_id, status, end_date, carryover_date, members(id, name, phone)')
     .eq('course_id', courseId)
-    .in('status', ['active', 'paused', 'ended']);
+    .in('status', ['active', 'paused', 'ended', 'waiting']);
 
   // 결재라인 설정 (일반 강좌 출석부와 같은 설정을 사용)
   let approvalValue: unknown = null;
@@ -60,6 +60,7 @@ export default async function LessonPrintPage({ params }: { params: { courseId: 
     member_id: e.member_id,
     status: e.status,
     end_date: e.end_date || null,
+    carryover_date: e.carryover_date || null,
     members: Array.isArray(e.members) ? (e.members[0] || null) : (e.members || null),
   }));
 

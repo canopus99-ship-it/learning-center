@@ -4,18 +4,21 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { fetchAllRows } from '@/lib/fetchAll';
+import { buildEndedMap, buildMonthlyLessons, lessonKey, mondaysOverlappingMonth, type MonthFixed, type MonthOverride } from '@/lib/lessonMonth';
 
 type Course = { id: number; category: string; name: string; is_free: boolean };
 type Enrollment = {
   id: number; member_id: number; course_id: number; status: string;
   enrolled_at: string | null; end_date: string | null;
   start_year: number | null; start_month: number | null;
+  carryover_date: string | null;
 };
 type Member = { id: number; name: string; is_discount_50: boolean; is_discount_100: boolean };
 type CourseDate = { id: number; course_id: number; class_date: string; is_cancelled: boolean };
 type AttendanceRow = { enrollment_id: number; course_date_id: number; is_present: boolean };
-type LessonFixed = { enrollment_id: number; course_id: number };
-type LessonAtt = { course_id: number; enrollment_id: number; attend_date: string; is_attended: boolean };
+type LessonFixed = MonthFixed & { enrollment_id: number; course_id: number };
+type LessonOverride = MonthOverride & { course_id: number };
+type LessonAtt = { course_id: number; enrollment_id: number; member_id: number; fixed_schedule_id: number | null; attend_date: string; is_attended: boolean };
 
 type Row = {
   memberId: number; memberName: string; courseId: number; courseName: string; category: string;
@@ -52,6 +55,8 @@ export default function AttendanceStatsClient() {
   const [present, setPresent] = useState<AttendanceRow[]>([]);
   const [lessonFixed, setLessonFixed] = useState<LessonFixed[]>([]);
   const [lessonAtt, setLessonAtt] = useState<LessonAtt[]>([]);
+  const [lessonOverrides, setLessonOverrides] = useState<LessonOverride[]>([]);
+  const [lessonClosed, setLessonClosed] = useState<{ course_id: number; closed_date: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -62,12 +67,13 @@ export default function AttendanceStatsClient() {
     setLoading(true);
 
     // 회원/강좌/출석 데이터가 1000행을 넘을 수 있어 전부 페이지 단위로 끝까지 가져옴
-    const [coursesRes, enrollRes, membersRes, datesRes, lessonFixedRes, lessonAttRes] = await Promise.all([
+    const firstMonday = mondaysOverlappingMonth(fromYear, fromMonth)[0];
+    const [coursesRes, enrollRes, membersRes, datesRes, lessonFixedRes, lessonAttRes, lessonOvrRes, lessonClosedRes] = await Promise.all([
       supabase.from('courses').select('id, category, name, is_free').order('category').order('name'),
       fetchAllRows<Enrollment>((from, to) =>
         supabase
           .from('enrollments')
-          .select('id, member_id, course_id, status, enrolled_at, end_date, start_year, start_month')
+          .select('id, member_id, course_id, status, enrolled_at, end_date, start_year, start_month, carryover_date')
           .range(from, to)
       ),
       fetchAllRows<Member>((from, to) =>
@@ -82,14 +88,34 @@ export default function AttendanceStatsClient() {
           .range(from, to)
       ),
       fetchAllRows<LessonFixed>((from, to) =>
-        supabase.from('lesson_fixed_schedules').select('enrollment_id, course_id').range(from, to)
+        // 조회 기간과 겹치는 고정 스케줄 전체 (영구 변경 전·후 스케줄 모두 - 주별로 유효한 것만 계산에 씀)
+        supabase.from('lesson_fixed_schedules')
+          .select('id, member_id, enrollment_id, course_id, day_of_week, start_time, effective_from, effective_until')
+          .lte('effective_from', end)
+          .range(from, to)
       ),
       fetchAllRows<LessonAtt>((from, to) =>
         supabase
           .from('lesson_attendance')
-          .select('course_id, enrollment_id, attend_date, is_attended')
+          .select('course_id, enrollment_id, member_id, fixed_schedule_id, attend_date, is_attended')
           .gte('attend_date', start)
           .lte('attend_date', end)
+          .range(from, to)
+      ),
+      fetchAllRows<LessonOverride>((from, to) =>
+        supabase
+          .from('lesson_schedules')
+          .select('course_id, fixed_schedule_id, week_start, schedule_date, start_time, is_cancelled')
+          .gte('week_start', firstMonday)
+          .lte('week_start', end)
+          .range(from, to)
+      ),
+      fetchAllRows<{ course_id: number; closed_date: string }>((from, to) =>
+        supabase
+          .from('lesson_closed_days')
+          .select('course_id, closed_date')
+          .gte('closed_date', start)
+          .lte('closed_date', end)
           .range(from, to)
       ),
     ]);
@@ -118,6 +144,8 @@ export default function AttendanceStatsClient() {
     setPresent(presentRows);
     setLessonFixed((lessonFixedRes.data || []) as LessonFixed[]);
     setLessonAtt((lessonAttRes.data || []) as LessonAtt[]);
+    setLessonOverrides((lessonOvrRes.data || []) as LessonOverride[]);
+    setLessonClosed(lessonClosedRes.data || []);
     setLoading(false);
     setLoaded(true);
   }
@@ -130,10 +158,12 @@ export default function AttendanceStatsClient() {
     const courseMap = new Map(courses.map(c => [c.id, c]));
     const memberMap = new Map(members.map(m => [m.id, m]));
 
-    // 일반 강좌: 운영 회차(취소 제외)
+    // 일반 강좌: 운영 회차 = 출석자가 1명 이상인 날 (강좌현황 통계·강사료와 같은 기준.
+    // 아직 오지 않은 날, 출석 0명인 날, 휴강일은 제외)
+    const heldDateIds = new Set(present.map(p => p.course_date_id));
     const datesByCourse = new Map<number, CourseDate[]>();
     courseDates.forEach(d => {
-      if (d.is_cancelled) return;
+      if (d.is_cancelled || !heldDateIds.has(d.id)) return;
       const arr = datesByCourse.get(d.course_id) || [];
       arr.push(d);
       datesByCourse.set(d.course_id, arr);
@@ -145,23 +175,58 @@ export default function AttendanceStatsClient() {
       presentByEnroll.set(p.enrollment_id, s);
     });
 
-    // 레슨: 주간 횟수(고정 레슨 수), 강좌별 운영일수, 회원별 출석 횟수
-    const freqByEnroll = new Map<number, number>();
-    lessonFixed.forEach(f => freqByEnroll.set(f.enrollment_id, (freqByEnroll.get(f.enrollment_id) || 0) + 1));
-    const lessonDaysByCourse = new Map<number, Set<string>>();
-    const lessonAttendedByEnroll = new Map<number, number>();
-    lessonAtt.forEach(a => {
-      if (!a.is_attended) return;
-      const s = lessonDaysByCourse.get(a.course_id) || new Set<string>();
-      s.add(a.attend_date);
-      lessonDaysByCourse.set(a.course_id, s);
-      lessonAttendedByEnroll.set(a.enrollment_id, (lessonAttendedByEnroll.get(a.enrollment_id) || 0) + 1);
-    });
+    // 레슨: 출력 출석부·수강생별 출석현황과 같은 계산(lib/lessonMonth)으로 회원별 예정 레슨을 구함
+    // - 주별로 유효한 고정 스케줄만 (영구 변경 전 스케줄을 중복으로 세지 않음)
+    // - 이번 주만 변경/취소, 공휴일, 강사 휴무일, 수강 종료·이월 반영
+    // 레슨 1회 = (고정 스케줄 id + 날짜). 예정에 없던 날 출석(보강)은 예정에도 더함
+    const endedMap = buildEndedMap(enrollments);
+    const lessonExpectedByEnroll = new Map<number, Set<string>>();
+    const lessonAttendedByEnroll = new Map<number, Set<string>>();
+    const lessonEnrollIds = new Set<number>();
+    {
+      const fixedByCourse = new Map<number, LessonFixed[]>();
+      lessonFixed.forEach(f => {
+        lessonEnrollIds.add(f.enrollment_id);
+        const arr = fixedByCourse.get(f.course_id) || [];
+        arr.push(f);
+        fixedByCourse.set(f.course_id, arr);
+      });
+      const enrollByCourseMember = new Map<string, number>();
+      lessonFixed.forEach(f => enrollByCourseMember.set(`${f.course_id}|${f.member_id}`, f.enrollment_id));
+
+      // 조회 기간의 각 달
+      const monthsList: { y: number; m: number }[] = [];
+      for (let y = fromYear, m = fromMonth; y < toYear || (y === toYear && m <= toMonth); ) {
+        monthsList.push({ y, m });
+        m++; if (m > 12) { m = 1; y++; }
+      }
+      fixedByCourse.forEach((fixedList, courseId) => {
+        const ovr = lessonOverrides.filter(o => o.course_id === courseId);
+        const closed = new Set(lessonClosed.filter(c => c.course_id === courseId).map(c => c.closed_date));
+        monthsList.forEach(({ y, m }) => {
+          const lessons = buildMonthlyLessons(fixedList, ovr, closed, y, m, endedMap);
+          lessons.forEach((occs, memberId) => {
+            const enrollId = enrollByCourseMember.get(`${courseId}|${memberId}`);
+            if (enrollId === undefined) return;
+            const set = lessonExpectedByEnroll.get(enrollId) || new Set<string>();
+            occs.forEach(o => set.add(lessonKey(o.fixedId, o.date)));
+            lessonExpectedByEnroll.set(enrollId, set);
+          });
+        });
+      });
+      lessonAtt.forEach(a => {
+        if (!a.is_attended) return;
+        const set = lessonAttendedByEnroll.get(a.enrollment_id) || new Set<string>();
+        set.add(lessonKey(a.fixed_schedule_id, a.attend_date));
+        lessonAttendedByEnroll.set(a.enrollment_id, set);
+      });
+    }
 
     const result: Row[] = [];
 
     enrollments.forEach(e => {
-      if (e.status === 'waiting') return;
+      // 처음부터 대기인 회원은 제외, 이월로 대기가 된 회원은 이월 처리일 전까지만 계산
+      if (e.status === 'waiting' && !e.carryover_date) return;
       const member = memberMap.get(e.member_id);
       const course = courseMap.get(e.course_id);
       if (!member || !course) return;
@@ -169,13 +234,14 @@ export default function AttendanceStatsClient() {
       const discount: '무료' | '감면' | '' =
         member.is_discount_100 ? '무료' : member.is_discount_50 ? '감면' : '';
 
-      // 레슨 학생: 고정 레슨이 있으면 레슨 방식 (예정 = 운영일수 × 주간횟수 ÷ 5)
-      const freq = freqByEnroll.get(e.id);
-      if (freq && freq > 0) {
-        const D = lessonDaysByCourse.get(e.course_id)?.size ?? 0;
-        const operating = Math.round((D * freq) / 5);
+      // 레슨 학생: 고정 레슨이 있으면 레슨 방식 (예정 레슨 대비 출석, 출력 출석부와 같은 기준)
+      if (lessonEnrollIds.has(e.id)) {
+        const expected = new Set(lessonExpectedByEnroll.get(e.id) || []);
+        const attendedSet = lessonAttendedByEnroll.get(e.id) || new Set<string>();
+        attendedSet.forEach(k => expected.add(k));
+        const operating = expected.size;
         if (operating === 0) return;
-        const attended = lessonAttendedByEnroll.get(e.id) ?? 0;
+        const attended = attendedSet.size;
         const rate = Math.round((attended / operating) * 100);
         result.push({
           memberId: member.id, memberName: member.name, courseId: course.id, courseName: course.name,
@@ -190,11 +256,16 @@ export default function AttendanceStatsClient() {
           ? `${e.start_year}-${String(e.start_month).padStart(2, '0')}-01`
           : (e.enrolled_at ? e.enrolled_at.substring(0, 10) : periodStart);
       const activeStart = memberStart > periodStart ? memberStart : periodStart;
-      const activeEnd = (e.end_date && e.end_date < periodEnd) ? e.end_date : periodEnd;
-      if (activeStart > activeEnd) return;
+      // 종료일(또는 이월 처리일) 당일부터는 출석할 수 없으므로 그 전날까지만 운영 회차로 셈
+      const endExclusive = e.status === 'ended' ? e.end_date
+        : e.status === 'waiting' ? (e.carryover_date ? e.carryover_date.substring(0, 10) : null)
+        : null;
+      if (endExclusive && endExclusive <= activeStart) return;
 
       const courseDatesList = datesByCourse.get(e.course_id) || [];
-      const operatingDates = courseDatesList.filter(d => d.class_date >= activeStart && d.class_date <= activeEnd);
+      const operatingDates = courseDatesList.filter(d =>
+        d.class_date >= activeStart && d.class_date <= periodEnd && (!endExclusive || d.class_date < endExclusive)
+      );
       const operating = operatingDates.length;
       if (operating === 0) return;
 
@@ -211,7 +282,7 @@ export default function AttendanceStatsClient() {
     result.sort((a, b) => a.rate - b.rate || a.memberName.localeCompare(b.memberName));
     const filtered = discountOnly ? result.filter(r => r.discount !== '') : result;
     return { all: result, filtered };
-  }, [loaded, courses, enrollments, members, courseDates, present, lessonFixed, lessonAtt, fromYear, fromMonth, toYear, toMonth, discountOnly]);
+  }, [loaded, courses, enrollments, members, courseDates, present, lessonFixed, lessonAtt, lessonOverrides, lessonClosed, fromYear, fromMonth, toYear, toMonth, discountOnly]);
 
   const allRows = computedRows.all;
   const rows = useMemo(

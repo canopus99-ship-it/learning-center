@@ -1,11 +1,23 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [noAccess, setNoAccess] = useState(false);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('error') === 'no_access') setNoAccess(true);
+  }, []);
+
+  // 직원 명단에 없는 계정으로 로그인된 경우: 로그아웃하고 다른 계정으로 다시 로그인할 수 있게 함
+  async function handleSwitchAccount() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    window.location.href = '/login';
+  }
 
   async function handleGoogleLogin() {
     setLoading(true);
@@ -79,6 +91,15 @@ export default function LoginPage() {
           </svg>
           {loading ? '이동 중...' : 'Google 계정으로 로그인'}
         </button>
+
+        {noAccess && (
+          <div style={{ marginTop: 16, padding: 12, background: '#FFF4F4', border: '1px solid #F5C2C2', borderRadius: 8, fontSize: 13, color: '#A32D2D', lineHeight: 1.6 }}>
+            로그인한 계정이 등록된 직원 명단에 없거나 비활성 상태입니다.<br />
+            <button onClick={handleSwitchAccount} style={{ marginTop: 8, padding: '8px 14px', background: '#A32D2D', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}>
+              로그아웃하고 다른 계정으로 로그인
+            </button>
+          </div>
+        )}
 
         {error && (
           <p style={{ color: '#A32D2D', fontSize: 13, marginTop: 16 }}>

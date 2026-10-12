@@ -502,6 +502,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   async function handleBulkSave() {
     if (!selectedMember) return;
     if (isEditMode) { await handleBulkEditSave(); return; }
+    if (!confirmOtherYear()) return;
     const { items } = calculateSelectionTotal();
     if (items.length === 0) return;
 
@@ -638,7 +639,16 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setPaymentModalOpen(true);
   }
 
+  // 화면에서 올해가 아닌 연도가 선택된 채로 결제를 처리하면 확인 (예: 2025년으로 선택된 채 연납을 처리해
+  // 같은 결제가 2025년에 한 번 더 들어간 사례가 있었음)
+  function confirmOtherYear(): boolean {
+    const thisYear = parseInt(getTodayKST().substring(0, 4), 10);
+    if (selectedYear === thisYear) return true;
+    return confirm(`지금 화면이 ${selectedYear}년으로 선택되어 있습니다.\n\n${selectedYear}년 결제로 처리됩니다. 맞습니까?\n(올해 결제라면 '취소'를 누르고 위에서 ${thisYear}년을 선택하세요)`);
+  }
+
   async function handleSavePayment(markPaid: boolean) {
+    if (markPaid && !confirmOtherYear()) return;
     if (!editingPayment) return;
     const { enrollment, course, existing, month } = editingPayment;
     const member = enrollment.members;

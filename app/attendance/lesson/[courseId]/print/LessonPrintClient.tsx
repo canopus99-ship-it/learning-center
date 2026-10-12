@@ -13,6 +13,7 @@ type Enrollment = {
   member_id: number;
   status: string;
   end_date: string | null;
+  carryover_date?: string | null;
   members: { id: number; name: string } | null;
 };
 type FixedSchedule = {

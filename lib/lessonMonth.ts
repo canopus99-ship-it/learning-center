@@ -71,15 +71,18 @@ export function getOffDayReason(dateStr: string, closedDates: Set<string>): stri
 }
 
 /**
- * 수강 종료 정보: enrollment_id → 종료일 ('' = 종료일 없이 종료됨 → 언제나 종료로 봄)
- * 종료(ended)가 아닌 수강신청은 들어가지 않음.
+ * 수강 종료 정보: enrollment_id → 이 날짜부터 레슨에서 빠짐 ('' = 언제나 빠짐)
+ * - 종료(ended): 종료일부터
+ * - 이월로 대기(waiting)가 된 회원: 이월 처리일(carryover_date)부터 (대기 중에는 레슨 없음)
+ * - 처음부터 대기인 회원(carryover_date 없음): 언제나 제외
  */
 export function buildEndedMap(
-  enrollments: { id: number; status: string; end_date?: string | null }[]
+  enrollments: { id: number; status: string; end_date?: string | null; carryover_date?: string | null }[]
 ): Map<number, string> {
   const map = new Map<number, string>();
   enrollments.forEach(e => {
     if (e.status === 'ended') map.set(e.id, e.end_date || '');
+    else if (e.status === 'waiting') map.set(e.id, e.carryover_date ? e.carryover_date.substring(0, 10) : '');
   });
   return map;
 }

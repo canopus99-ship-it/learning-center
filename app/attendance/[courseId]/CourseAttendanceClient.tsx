@@ -254,6 +254,8 @@ export default function CourseAttendanceClient({
     selectedYear,
     selectedMonth
   );
+  // 실제 운영한 수업 횟수 = 출석자가 1명 이상인 날 수
+  const heldCount = monthDates.filter(d => !d.is_cancelled && (perDateCount[d.id] || 0) > 0).length;
 
   // 월 운영 여부
   // - 운영월이 비어 있는 강좌(일회성/비정기 강좌 등)는 parseOperationMonths가 "전체 월"로 처리 (다른 화면과 동일 기준)
@@ -486,11 +488,12 @@ export default function CourseAttendanceClient({
           📊 {selectedYear}년 {selectedMonth}월 실적
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
-          <SummaryBox label="수업 횟수" value={`${monthDates.filter(d => !d.is_cancelled).length}회`} color="#185FA5" />
+          {/* 수업 횟수 = 출석자가 1명 이상인 날 (강좌현황 통계·강사료와 같은 기준. 아직 안 온 날·출석 0명인 날 제외) */}
+          <SummaryBox label="수업 횟수" value={`${heldCount}회`} color="#185FA5" />
           <SummaryBox label="휴강" value={`${monthDates.filter(d => d.is_cancelled).length}회`} color="#888" />
           <SummaryBox label="총 출석 인원" value={`${totalAttendance}명`} color="#1D9E75" />
-          <SummaryBox label="평균 출석률" value={`${monthDates.filter(d => !d.is_cancelled).length > 0 && allEnrollments.length > 0
-            ? Math.round((totalAttendance / (monthDates.filter(d => !d.is_cancelled).length * allEnrollments.length)) * 100)
+          <SummaryBox label="평균 출석률" value={`${heldCount > 0 && allEnrollments.length > 0
+            ? Math.round((totalAttendance / (heldCount * allEnrollments.length)) * 100)
             : 0}%`} color="#7B3FBF" />
         </div>
       </div>

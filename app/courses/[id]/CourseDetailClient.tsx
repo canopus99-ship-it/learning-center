@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { getTodayKST } from '@/lib/date';
 import { DAY_LABELS, FREQUENCY_LABELS, generateRegularDates, type SessionConfig } from '@/lib/courseDates';
 import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus, REACTIVATE_RESET, startYearForMonth, nextWaitingOrder } from '@/lib/enrollment';
 import {
@@ -393,7 +394,8 @@ export default function CourseDetailClient({
     const regenerateDates = confirm(
       '수업 일정이 변경되었습니다.\n\n' +
       '⚠️ "확인"을 누르면:\n' +
-      '  - 기존 자동 생성된 수업 날짜가 모두 삭제됩니다\n' +
+      '  - 오늘 이후의 자동 생성된 수업 날짜가 새 일정으로 바뀝니다\n' +
+      '  - 지난 수업일과 출석 기록이 있는 날짜는 그대로 유지됩니다\n' +
       '  - 새 일정 기준으로 출석부가 다시 생성됩니다\n' +
       '  - 보강으로 추가한 날짜는 그대로 유지됩니다\n\n' +
       '"취소"를 누르면 일정 정보만 저장하고 기존 출석부는 유지됩니다.'
@@ -406,6 +408,9 @@ export default function CourseDetailClient({
 
     if (courseError) { alert('강좌 수정 실패: ' + courseError.message); return; }
 
+    // 기존 수업일이 예전 세션을 참조하고 있으면, 세션을 지울 때 DB 설정에 따라 수업일(과 출석)까지
+    // 함께 지워질 수 있으므로 먼저 연결만 끊어 둠 (수업일·출석 기록은 그대로 유지)
+    await supabase.from('course_dates').update({ session_id: null }).eq('course_id', course.id);
     await supabase.from('course_sessions').delete().eq('course_id', course.id);
 
     const sessionsToInsert = editOperationType === 'regular'
@@ -424,7 +429,35 @@ export default function CourseDetailClient({
     if (sessionsError) { alert('세션 저장 실패: ' + sessionsError.message); return; }
 
     if (regenerateDates) {
-      await supabase.from('course_dates').delete().eq('course_id', course.id).eq('is_makeup', false);
+      // 지난 수업일·출석 기록 보호:
+      // - 오늘 이전 날짜와, 출석 기록이 있는 날짜는 지우지 않고 그대로 둠
+      // - 오늘 이후의 (출석 없는) 자동 생성 날짜만 지우고 새 일정으로 다시 만듦
+      // (예전에는 날짜 범위 없이 전부 지워서, 지난달까지의 수업일·휴강 표시가 사라지는 문제가 있었음)
+      const todayStr = getTodayKST();
+      const { data: existingDates } = await supabase
+        .from('course_dates')
+        .select('id, class_date, start_time')
+        .eq('course_id', course.id)
+        .eq('is_makeup', false);
+      const existing = existingDates || [];
+      const futureIds = existing.filter(d => d.class_date >= todayStr).map(d => d.id);
+      const withAttendance = new Set<number>();
+      for (let i = 0; i < futureIds.length; i += 200) {
+        const { data: att } = await supabase
+          .from('attendance')
+          .select('course_date_id')
+          .in('course_date_id', futureIds.slice(i, i + 200));
+        (att || []).forEach((a: { course_date_id: number }) => withAttendance.add(a.course_date_id));
+      }
+      const deleteIds = futureIds.filter(id => !withAttendance.has(id));
+      for (let i = 0; i < deleteIds.length; i += 200) {
+        const { error: delErr } = await supabase.from('course_dates').delete().in('id', deleteIds.slice(i, i + 200));
+        if (delErr) { alert('기존 수업일 정리 실패: ' + delErr.message); return; }
+      }
+      // 남겨 둔 날짜(지난 날짜, 출석 있는 날짜)와 같은 날짜·시간은 새로 만들지 않음
+      const keptKeys = new Set(
+        existing.filter(d => !deleteIds.includes(d.id)).map(d => `${d.class_date}|${(d.start_time || '').substring(0, 5)}`)
+      );
 
       const datesToInsert: any[] = [];
       if (editOperationType === 'regular') {
@@ -454,10 +487,15 @@ export default function CourseDetailClient({
         });
       }
 
-      if (datesToInsert.length > 0) {
-        await supabase.from('course_dates').insert(datesToInsert);
+      // 오늘 이후 날짜만, 남겨 둔 날짜와 겹치지 않게 추가
+      const toInsert = datesToInsert.filter(d =>
+        d.class_date >= todayStr && !keptKeys.has(`${d.class_date}|${(d.start_time || '').substring(0, 5)}`)
+      );
+      if (toInsert.length > 0) {
+        const { error: insErr } = await supabase.from('course_dates').insert(toInsert);
+        if (insErr) { alert('새 수업일 생성 실패: ' + insErr.message); return; }
       }
-      alert(`일정이 수정되고 출석부가 다시 생성되었습니다. (총 ${datesToInsert.length}개)`);
+      alert(`일정이 수정되었습니다.\n오늘(${todayStr}) 이후 수업일 ${toInsert.length}개를 새 일정으로 만들었습니다.\n지난 수업일과 출석 기록이 있는 날은 그대로 유지됩니다.`);
     } else {
       alert('일정 정보만 저장되었습니다.');
     }
