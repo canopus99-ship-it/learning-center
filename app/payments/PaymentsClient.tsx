@@ -31,6 +31,7 @@ type Course = {
   is_free: boolean;
   is_active: boolean;
   use_levels?: boolean;
+  operation_type?: string | null; // 'regular'(정기) | 'irregular'(비정기: 특정 날짜만)
 };
 
 type CourseLevel = {
@@ -123,6 +124,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [courseLevels, setCourseLevels] = useState<CourseLevel[]>([]);
+  // 비정기 강좌(특정 날짜에만 하는 강좌)의 실제 수업 월: course_id → 그 해 수업이 있는 월 목록
+  const [irregularMonths, setIrregularMonths] = useState<Map<number, number[]>>(new Map());
 
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
@@ -226,6 +229,29 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       supabase.from('course_levels').select('*').order('course_id').order('sort_order'),
     ]);
 
+    // 비정기 강좌는 운영월(operation_months)이 비어 있어서 예전에는 1~12월 전체가 운영월로 잡혔음
+    // (예: 9/12 하루 행사인데 10월에도 수납관리에 계속 표시) → 실제 수업일이 있는 달만 운영월로 봄
+    const irregularIds = ((coursesRes.data || []) as Course[]).filter(c => c.operation_type === 'irregular').map(c => c.id);
+    const irrMap = new Map<number, number[]>();
+    if (irregularIds.length > 0) {
+      const { data: irrDates } = await fetchAllRows<{ course_id: number; class_date: string }>((from, to) =>
+        supabase.from('course_dates').select('course_id, class_date')
+          .in('course_id', irregularIds)
+          .eq('is_cancelled', false)
+          .gte('class_date', `${selectedYear}-01-01`)
+          .lte('class_date', `${selectedYear}-12-31`)
+          .order('id')
+          .range(from, to)
+      );
+      irregularIds.forEach(id => irrMap.set(id, []));
+      (irrDates || []).forEach(d => {
+        const m = parseInt(d.class_date.substring(5, 7), 10);
+        const arr = irrMap.get(d.course_id)!;
+        if (!arr.includes(m)) arr.push(m);
+      });
+      irrMap.forEach(arr => arr.sort((a, b) => a - b));
+    }
+    setIrregularMonths(irrMap);
     setCourses(coursesRes.data || []);
     setEnrollments((enrollmentsRes.data as Enrollment[]) || []);
     setPayments(paymentsRes.data || []);
@@ -644,13 +670,19 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setPaymentModalOpen(true);
   }
 
+  // 강좌의 운영월: 정기 강좌는 설정된 운영월, 비정기 강좌는 실제 수업일이 있는 달
+  function courseOpMonths(course: Course): number[] {
+    if (course.operation_type === 'irregular') return irregularMonths.get(course.id) || [];
+    return parseOperationMonths(course.operation_months);
+  }
+
   // ===== 무료강좌 등록 확인 =====
   // 무료강좌(강좌 자체가 무료)는 결제 대신 담당자가 [등록 확인]을 한 번 눌러 교육 기간(운영월)만큼
   // 출석부 등록을 확정한다. 내부적으로는 출석부·통계가 쓰는 월별 등록 기록(0원, 결제방법 없음)을 만들어
   // 기존 화면들과 그대로 연결되고, 일별결제현황·영수증에서는 빠진다.
   // ※ 유료강좌를 감면(100%)으로 0원 내는 경우는 지금처럼 결제처리로 함 (course.is_free로 구분)
   function openFreeConfirm(enrollment: Enrollment, course: Course, defaultMonth: number) {
-    const ops = parseOperationMonths(course.operation_months);
+    const ops = courseOpMonths(course);
     const from = ops.find(m => m >= defaultMonth) ?? ops[0] ?? defaultMonth;
     const to = ops.length ? ops[ops.length - 1] : 12;
     setFreeFrom(from);
@@ -662,7 +694,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     if (!freeConfirm) return;
     if (!confirmOtherYear()) return;
     const { enrollment, course } = freeConfirm;
-    const ops = parseOperationMonths(course.operation_months).filter(m => m >= freeFrom && m <= freeTo);
+    const ops = courseOpMonths(course).filter(m => m >= freeFrom && m <= freeTo);
     const targets = ops.filter(m => !getPayment(enrollment.id, m)?.is_paid);
     if (targets.length === 0) { alert('선택한 기간은 이미 모두 등록 확인되어 있습니다.'); return; }
     setFreeSaving(true);
@@ -1129,7 +1161,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     const rows: { 강좌명: string; 이름: string; 연락처: string; 상태: string; 결제일: string }[] = [];
 
     targetCourses.forEach(course => {
-      const operationMonths = parseOperationMonths(course.operation_months);
+      const operationMonths = courseOpMonths(course);
       const isOperating = operationMonths.includes(selectedMonth);
       if (!isOperating) return; // 운영X 강좌는 제외
 
@@ -1283,7 +1315,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   // 조회 월 운영월 체크 + 1월 OT 체크 헬퍼
   function isCheckMonthValid(course: Course): boolean {
     if (checkMonth === 1) return false; // 1월 OT
-    const opMonths = parseOperationMonths(course.operation_months);
+    const opMonths = courseOpMonths(course);
     return opMonths.includes(checkMonth);
   }
 
@@ -1536,7 +1568,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                           const course = courses.find(c => c.id === enrollment.course_id);
                           if (!course) return null;
 
-                          const operationMonths = parseOperationMonths(course.operation_months);
+                          const operationMonths = courseOpMonths(course);
                           const calc = (() => { const f = getEnrollmentFees(course, selectedMember.id); return calculateFee(
                             f.fee_jung_gu, f.fee_other,
                             selectedMember.is_jung_gu, selectedMember.is_discount_50, selectedMember.is_discount_100,
@@ -1912,8 +1944,10 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
               {(selectedCourseId === 'all' ? courses : courses.filter(c => c.id === selectedCourseId)).map(course => {
                 const courseEnrollments = getEnrollmentsByCourse(course.id);
-                const operationMonths = parseOperationMonths(course.operation_months);
+                const operationMonths = courseOpMonths(course);
                 const isOperating = operationMonths.includes(selectedMonth);
+                // 비정기 강좌(하루 행사 등)는 수업이 없는 달에는 강좌별 보기에 표시하지 않음
+                if (!isOperating && course.operation_type === 'irregular') return null;
 
                 const unpaidCount = courseEnrollments.filter(e => {
                   if (!isOperating || !e.members) return false;
@@ -2488,7 +2522,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
       {/* 무료강좌 등록 확인 모달 */}
       {freeConfirm && (() => {
-        const ops = parseOperationMonths(freeConfirm.course.operation_months);
+        const ops = courseOpMonths(freeConfirm.course);
         const inRange = ops.filter(m => m >= freeFrom && m <= freeTo);
         const already = inRange.filter(m => getPayment(freeConfirm.enrollment.id, m)?.is_paid);
         return (
