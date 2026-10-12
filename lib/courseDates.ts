@@ -68,9 +68,10 @@ export function generateRegularDates(
           });
         });
       } else if (session.frequency === 'biweekly') {
-        // 격주: 1, 3번째 (또는 2, 4번째)
-        monthDates.forEach((d, i) => {
-          if (i % 2 === 0) {
+        // 격주: 운영 기간 첫 수업일부터 2주 간격 (달이 바뀌어도 간격 유지)
+        // (예전에는 달마다 1·3번째로 다시 세서, 요일이 5번 있는 달 다음 달에 1주 간격이 생겼음)
+        monthDates.forEach((d) => {
+          if (isBiweeklyOn(d, year, operationMonths, session.day_of_week)) {
             result.push({
               class_date: formatDate(d),
               start_time: session.start_time,
@@ -101,6 +102,15 @@ export function generateRegularDates(
   });
 
   return result;
+}
+
+/** 격주 판정: 운영월 중 첫 해당 요일을 기준으로 짝수 번째 주인지 */
+function isBiweeklyOn(d: Date, year: number, operationMonths: number[], dayOfWeek: number): boolean {
+  const firstMonth = Math.min(...operationMonths);
+  const first = getDatesOfDayInMonth(year, firstMonth, dayOfWeek)[0];
+  if (!first) return false;
+  const diffDays = Math.round((d.getTime() - first.getTime()) / 86400000);
+  return diffDays >= 0 && Math.floor(diffDays / 7) % 2 === 0;
 }
 
 function formatDate(d: Date): string {

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { buildEndedMap, isEndedOn } from '@/lib/lessonMonth';
+import { getHolidayName } from '@/lib/holidays';
 
 type Course = {
   id: number;
@@ -105,6 +106,8 @@ export default function TodayAttendanceClient({
   const [attended, setAttended] = useState<Set<string>>(new Set()); // key = fixedId or overrideId
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
+  // 오늘이 강사가 지정한 휴무일인지 (공휴일은 holidays 목록으로 바로 판단)
+  const [isClosedToday, setIsClosedToday] = useState(false);
 
   const memberNameMap = new Map<number, string>();
   enrollments.forEach(e => { if (e.members) memberNameMap.set(e.member_id, e.members.name); });
@@ -132,6 +135,15 @@ export default function TodayAttendanceClient({
       .select('*')
       .eq('course_id', course.id)
       .eq('week_start', weekStartStr);
+
+    // 오늘이 휴무일로 지정되어 있는지
+    const { data: closedRow } = await supabase
+      .from('lesson_closed_days')
+      .select('closed_date')
+      .eq('course_id', course.id)
+      .eq('closed_date', todayStr)
+      .maybeSingle();
+    setIsClosedToday(!!closedRow);
 
     // 오늘 출석 기록
     const { data: attRecords } = await supabase
@@ -266,6 +278,8 @@ export default function TodayAttendanceClient({
   const totalCount = slots.length;
 
   const isWeekend = rawDow === 0 || rawDow === 6;
+  const holidayName = getHolidayName(todayStr);
+  const offLabel = holidayName || (isClosedToday ? '휴무일' : null);
 
   return (
     <div style={{ maxWidth: 600, margin: '0 auto', padding: '16px' }}>
@@ -286,6 +300,14 @@ export default function TodayAttendanceClient({
           </span>
         </div>
       </div>
+
+      {/* 공휴일·휴무일 안내 (레슨이 있으면 체크는 가능하지만 출석부에는 예정 외 출석으로 기록됨) */}
+      {!loading && !isWeekend && offLabel && (
+        <div style={{ background: '#FFF4E5', border: '1px solid #F5C77E', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13, color: '#7A4B00', lineHeight: 1.6 }}>
+          📅 오늘은 <strong>{offLabel}</strong>입니다. 레슨이 없는 날로 처리되어 있어요.<br />
+          실제로 레슨을 했다면 출석 체크는 가능하며, 출력 출석부에는 '예정 외 출석'으로 함께 표시됩니다.
+        </div>
+      )}
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: '#888' }}>불러오는 중...</div>

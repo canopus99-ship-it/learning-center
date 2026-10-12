@@ -393,11 +393,11 @@ export default function LessonScheduleClient({
     if (cntErr) { alert('출석 기록 확인 실패: ' + cntErr.message); return; }
 
     if ((count || 0) > 0) {
-      // 이번 주 이 레슨 요일이 이미 지났으면(레슨이 이미 있었던 주) 이번 주까지 남기고 다음 주부터 종료,
+      // 이번 주 이 레슨 요일이 이미 지났거나 오늘이면(레슨이 이미 있었을 수 있는 주) 이번 주까지 남기고 다음 주부터 종료,
       // 아직 안 지났으면 이번 주부터 종료 → 이미 한 레슨이 '예정에 없던 출석'으로 어긋나지 않게
       const todayDow = (today.getDay() + 6) % 7; // 0=월~6=일
       const thisMonday = getMonday(today);
-      const endFromMonday = selectedFixed.day_of_week < todayDow ? addDays(thisMonday, 7) : thisMonday;
+      const endFromMonday = selectedFixed.day_of_week <= todayDow ? addDays(thisMonday, 7) : thisMonday;
       const todayMonday = endFromMonday;
       const untilStr = ymd(addDays(endFromMonday, -1));
       if (!confirm(`${name}님의 이 스케줄에는 출석 기록이 ${count}건 있습니다.\n\n기록을 지키기 위해 삭제하지 않고 ${fmtWeekLabel(endFromMonday)} 주부터 스케줄을 종료합니다.\n지난 출석 기록은 그대로 남습니다.\n\n진행하시겠습니까?`)) return;
@@ -444,12 +444,12 @@ export default function LessonScheduleClient({
     if (!selectedFixed) return;
     const todayMonday = getMonday(today);
     let changeFromMonday = weekStart > todayMonday ? weekStart : todayMonday;
-    // 이번 주부터 바꾸려는데 예전 요일이나 새 요일이 이번 주에 이미 지났으면, 다음 주부터 적용
+    // 이번 주부터 바꾸려는데 예전 요일이나 새 요일이 이번 주에 이미 지났거나 오늘이면, 다음 주부터 적용
     // (이미 지난 요일에 가짜 '예정 레슨'이 생기거나, 이번 주에 이미 한 레슨이 어긋나는 것을 막기 위함.
     //  이번 주만 바꿀 필요가 있으면 '이번 주만 변경'을 사용)
     const todayDow = (today.getDay() + 6) % 7; // 0=월~6=일
     let movedToNextWeek = false;
-    if (ymd(changeFromMonday) === ymd(todayMonday) && (selectedFixed.day_of_week < todayDow || formDay < todayDow)) {
+    if (ymd(changeFromMonday) === ymd(todayMonday) && (selectedFixed.day_of_week <= todayDow || formDay <= todayDow)) {
       changeFromMonday = addDays(todayMonday, 7);
       movedToNextWeek = true;
     }

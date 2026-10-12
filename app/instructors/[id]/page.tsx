@@ -36,7 +36,7 @@ export default async function InstructorDetailPage({
   const { data: courses } = await supabase
     .from('courses')
     .select('id, name, category, is_active')
-    .eq('instructor_id', instructorId)
+    .or(`instructor_id.eq.${instructorId},sub_instructor_id.eq.${instructorId}`) // 주강사·보조강사로 맡은 강좌 모두
     .order('is_active', { ascending: false })
     .order('name');
 

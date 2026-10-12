@@ -1175,6 +1175,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
             if (selectedMonth === 1) return false;
             const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
             if (calc.amount === 0) return false;
+            if (e.status === 'waiting') return false; // 이월로 대기 중 → 미납 아님
             const p = getPayment(e.id, selectedMonth);
             return !p || !p.is_paid;
           })
@@ -1190,7 +1191,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         const isOTMonth = selectedMonth === 1;
 
         let statusLabel = '';
-        if (p?.is_paid) statusLabel = '등록';
+        if (p?.status_type === 'refunded') statusLabel = '환불';
+        else if (p?.status_type === 'carryover') statusLabel = '이월';
+        else if (p?.status_type === 'transferred') statusLabel = '대체';
+        else if (p?.is_paid) statusLabel = course.is_free ? '등록확인' : '등록';
+        else if (e.status === 'waiting') statusLabel = '이월·대기';
+        else if (course.is_free) statusLabel = isBeforeStartMonth(e, selectedYear, selectedMonth) ? '신청전' : '확인 필요';
         else if (isBeforeStartMonth(e, selectedYear, selectedMonth)) statusLabel = '신청전';
         else if (isAutoComplete && pastOrCurrent) statusLabel = '자동등록';
         else if (pastOrCurrent && !isOTMonth) statusLabel = '미납';
@@ -1251,6 +1257,24 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   const baseYear = todayYear;
   const baseMonth = todayMonth;
 
+  // 화면에는 선택 연도(selectedYear)의 결제만 불러와 있으므로, 기준 연도·조회 연도가 다르면
+  // 그 연도의 결제를 따로 불러옴 (예: 12월에 내년 1월 납부 점검 → 예전에는 결제 데이터가 없어 전원 '미납')
+  const [extraPayments, setExtraPayments] = useState<Payment[]>([]);
+  useEffect(() => {
+    const years = Array.from(new Set([baseYear, checkYear])).filter(y => y !== selectedYear);
+    if (years.length === 0) { setExtraPayments([]); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await fetchAllRows<Payment>((from, to) =>
+        supabase.from('payments').select('*').in('payment_year', years).order('id').range(from, to)
+      );
+      if (!cancelled) setExtraPayments(data || []);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseYear, checkYear, selectedYear]);
+  const unpaidCheckPayments = extraPayments.length > 0 ? [...payments, ...extraPayments] : payments;
+
   type UnpaidStatus = 'paid' | 'unpaid' | 'ended' | 'refund' | 'carryover';
   type UnpaidRow = {
     course: Course;
@@ -1276,7 +1300,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     // 기준 월 결제 완료 여부
     const p = getPayment(enrollment.id, baseMonth);
     // 기준 월 = baseYear이지만 selectedYear가 다를 수 있으니 직접 찾기
-    const basePay = payments.find(pp =>
+    const basePay = unpaidCheckPayments.find(pp =>
       pp.enrollment_id === enrollment.id &&
       pp.payment_year === baseYear &&
       pp.payment_month === baseMonth &&
@@ -1292,7 +1316,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     if (isEndedAtMonth(enrollment, checkYear, checkMonth)) return 'ended';
 
     // 2) 조회 월의 결제 기록 조회
-    const p = payments.find(pp =>
+    const p = unpaidCheckPayments.find(pp =>
       pp.enrollment_id === enrollment.id &&
       pp.payment_year === checkYear &&
       pp.payment_month === checkMonth
@@ -1956,6 +1980,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                   if (selectedMonth === 1) return false; // 1월 OT 제외
                   const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
                   if (calc.amount === 0) return false;
+                  if (e.status === 'waiting') return false; // 이월로 대기 중 → 미납 아님
                   const p = getPayment(e.id, selectedMonth);
                   return !p || !p.is_paid;
                 }).length;
@@ -1968,6 +1993,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                       if (selectedMonth === 1) return false;
                       const calc = (() => { const f = getCourseFees(course, e); return calculateFee(f.fee_jung_gu, f.fee_other, e.members!.is_jung_gu, e.members!.is_discount_50, e.members!.is_discount_100, course.is_free); })();
                       if (calc.amount === 0) return false;
+                      if (e.status === 'waiting') return false; // 이월로 대기 중 → 미납 아님
                       const p = getPayment(e.id, selectedMonth);
                       return !p || !p.is_paid;
                     })
@@ -2036,6 +2062,10 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                             } else if (p?.is_paid) {
                               statusLabel = '✓ 등록';
                               statusColor = '#1D9E75';
+                            } else if (e.status === 'waiting') {
+                              // 이월로 대기 중: 결제 대상 아님 (대기에서 복귀하면 다시 결제)
+                              statusLabel = '이월·대기';
+                              statusColor = '#BA7517';
                             } else if (isBeforeStartMonth(e, selectedYear, selectedMonth)) {
                               statusLabel = '신청전';
                               statusColor = '#bbb';

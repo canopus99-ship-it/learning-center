@@ -379,7 +379,10 @@ export default function CourseStatsClient() {
     // key 동일 → 전체 기간 출석 이벤트 수 합계 (합계 연인원)
     const totalAttCounts = new Map<string, number>();
 
+    // 신규인원 계산 때문에 연초부터 데이터를 불러오므로, 조회 기간 밖의 달은 상세통계에서 제외
+    const monthsInRange = new Set(months.map(({ y, m }) => `${y}-${m}`));
     function bump(courseId: number, monthKey: string, dim: DimKey, value: string, memberId: number) {
+      if (!monthsInRange.has(monthKey)) return;
       const mk = `${courseId}|${monthKey}|${dim}|${value}`;
       if (!monthlyRealSets.has(mk)) monthlyRealSets.set(mk, new Set());
       monthlyRealSets.get(mk)!.add(memberId);

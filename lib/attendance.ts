@@ -43,8 +43,16 @@ export function canCheckAttendance(
 
   // 3. 환불된 결제: 환불일 기준으로 출석 가능 범위 제한
   if (refundDate) {
+    // 환불 규칙(15일 기준)은 '환불한 달'의 수업에만 적용.
+    // 환불일이 수업 달보다 뒤의 달이면(예: 10월분을 11/3에 환불) 이미 지난 그 달 수업은 막지 않음
+    const refundYm = refundDate.substring(0, 7);
+    const classYm = classDate.substring(0, 7);
+    if (refundYm > classYm) return { canCheck: true, reason: null };
     // 환불일의 일(day) 추출
     const refundDay = parseInt(refundDate.substring(8, 10), 10);
+    if (refundYm < classYm) {
+      return { canCheck: false, reason: `환불일(${refundDate}) 이후 수업입니다` };
+    }
     if (refundDay <= 15) {
       // 1~15일 환불: 1~15일 수업까지만 출석 가능
       // 수업일의 일(day)로 비교 (같은 월 안에서만 비교, 다음달은 위에서 이미 명단에서 제외됨)

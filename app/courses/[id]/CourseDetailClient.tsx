@@ -454,10 +454,8 @@ export default function CourseDetailClient({
         const { error: delErr } = await supabase.from('course_dates').delete().in('id', deleteIds.slice(i, i + 200));
         if (delErr) { alert('기존 수업일 정리 실패: ' + delErr.message); return; }
       }
-      // 남겨 둔 날짜(지난 날짜, 출석 있는 날짜)와 같은 날짜·시간은 새로 만들지 않음
-      const keptKeys = new Set(
-        existing.filter(d => !deleteIds.includes(d.id)).map(d => `${d.class_date}|${(d.start_time || '').substring(0, 5)}`)
-      );
+      // 남겨 둔 날짜(지난 날짜, 출석 있는 날짜)와 같은 날짜는 새로 만들지 않음 (시간이 바뀌어도 같은 날 두 번 생기지 않게)
+      const keptKeys = new Set(existing.filter(d => !deleteIds.includes(d.id)).map(d => d.class_date));
 
       const datesToInsert: any[] = [];
       if (editOperationType === 'regular') {
@@ -489,7 +487,7 @@ export default function CourseDetailClient({
 
       // 오늘 이후 날짜만, 남겨 둔 날짜와 겹치지 않게 추가
       const toInsert = datesToInsert.filter(d =>
-        d.class_date >= todayStr && !keptKeys.has(`${d.class_date}|${(d.start_time || '').substring(0, 5)}`)
+        d.class_date >= todayStr && !keptKeys.has(d.class_date)
       );
       if (toInsert.length > 0) {
         const { error: insErr } = await supabase.from('course_dates').insert(toInsert);

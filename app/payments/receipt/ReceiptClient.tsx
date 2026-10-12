@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { PAYMENT_METHOD_LABELS, type PaymentMethod } from '@/lib/payments';
-import { nextReceiptNumber, receiptNumberPrefix, formatKoreanDate, formatKoreanDateFromStr } from '@/lib/receipts';
+import { nextReceiptNumber, receiptNumberPrefix, receiptDatePart, formatKoreanDate, formatKoreanDateFromStr } from '@/lib/receipts';
 
 type PaymentRow = {
   id: number;
@@ -60,6 +60,8 @@ export default function ReceiptClient({ ids }: { ids: number[] }) {
   const [memberPhone, setMemberPhone] = useState('');
   const [lines, setLines] = useState<LineItem[]>([]);
   const [receiptNumber, setReceiptNumber] = useState('');
+  // 이번 영수증에 포함된 결제 중 예전에 이미 다른 번호로 발급된 것들 (번호는 바꾸지 않고 참고로 표시)
+  const [previousNumbers, setPreviousNumbers] = useState<string[]>([]);
   const [isReissue, setIsReissue] = useState(false);
 
   useEffect(() => {
@@ -177,30 +179,53 @@ export default function ReceiptClient({ ids }: { ids: number[] }) {
       });
     setLines(builtLines);
 
-    // 영수증 번호: 선택된 결제건이 전부 같은 번호를 이미 갖고 있으면 재사용(재발행), 아니면 새로 발급해서 저장
+    // 영수증 번호
+    // - 선택한 결제가 모두 같은 번호를 이미 갖고 있으면 그 번호 그대로(재발행)
+    // - 아니면 새 번호를 발급해서 "아직 번호가 없는 결제"에만 저장. 이미 번호가 있는 결제는 번호를 바꾸지 않음
+    //   (예전에는 섞어서 출력하면 이미 발급해 준 영수증 번호가 새 번호로 덮어써졌음)
+    // - 새 번호는 DB 함수(next_receipt_number)가 하나씩 발급 → 두 사람이 동시에 출력해도 겹치지 않음
+    //   (DB 함수가 아직 없으면 예전 방식으로 대체)
     const nums = validPayments.map((p) => p.receipt_number);
     const allSame = nums.length > 0 && nums.every((n) => !!n && n === nums[0]);
 
+    const hasUnnumbered = validPayments.some((p) => !p.receipt_number);
     if (allSame) {
       setReceiptNumber(nums[0] as string);
+      setPreviousNumbers([]);
+    } else if (!hasUnnumbered) {
+      // 모두 이미 (서로 다른) 번호가 있는 결제들 → 새 번호를 만들지 않음 (저장되지 않는 번호가 인쇄되는 것 방지)
+      const existing = Array.from(new Set(nums.filter((n): n is string => !!n))).sort();
+      setReceiptNumber(existing.join(', '));
+      setPreviousNumbers(existing);
     } else {
-      const prefix = receiptNumberPrefix();
-      const { data: existingRows } = await supabase
-        .from('payments')
-        .select('receipt_number')
-        .like('receipt_number', `${prefix}%`);
-      const newNumber = nextReceiptNumber((existingRows || []).map((r) => r.receipt_number));
-
-      const paymentIds = validPayments.map((p) => p.id);
-      const { error: updErr } = await supabase
-        .from('payments')
-        .update({ receipt_number: newNumber })
-        .in('id', paymentIds);
-
-      if (updErr) {
-        console.error('영수증 번호 저장 실패:', updErr);
+      let newNumber: string | null = null;
+      const { data: rpcNo, error: rpcErr } = await supabase.rpc('next_receipt_number', {
+        p_day: `${receiptDatePart().substring(0, 4)}-${receiptDatePart().substring(4, 6)}-${receiptDatePart().substring(6, 8)}`,
+      });
+      if (!rpcErr && typeof rpcNo === 'string') {
+        newNumber = rpcNo;
+      } else {
+        const prefix = receiptNumberPrefix();
+        const { data: existingRows } = await supabase
+          .from('payments')
+          .select('receipt_number')
+          .like('receipt_number', `${prefix}%`);
+        newNumber = nextReceiptNumber((existingRows || []).map((r) => r.receipt_number));
       }
-      setReceiptNumber(newNumber);
+
+      const unnumberedIds = validPayments.filter((p) => !p.receipt_number).map((p) => p.id);
+      if (unnumberedIds.length > 0) {
+        const { error: updErr } = await supabase
+          .from('payments')
+          .update({ receipt_number: newNumber })
+          .in('id', unnumberedIds);
+        if (updErr) {
+          console.error('영수증 번호 저장 실패:', updErr);
+          alert('영수증 번호 저장에 실패했습니다. 인터넷 연결을 확인하고 다시 열어 주세요.\n(' + updErr.message + ')');
+        }
+      }
+      setReceiptNumber(newNumber as string);
+      setPreviousNumbers(Array.from(new Set(nums.filter((n): n is string => !!n))));
     }
 
     setLoading(false);
@@ -264,6 +289,11 @@ export default function ReceiptClient({ ids }: { ids: number[] }) {
             </div>
             <div style={{ fontSize: 12, color: '#888', marginBottom: 20 }}>
               영수증 번호 {receiptNumber} · {memberName}님 · {lines.length}건 · 합계 {total.toLocaleString()}원
+              {previousNumbers.length > 0 && (
+                <div style={{ color: '#E8820E', marginTop: 4 }}>
+                  ※ 이 중 일부는 이미 {previousNumbers.join(', ')} 번호로 영수증이 발급된 결제입니다. (기존 번호는 그대로 유지)
+                </div>
+              )}
             </div>
           </>
         )}
