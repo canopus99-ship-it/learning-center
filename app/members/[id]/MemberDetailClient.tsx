@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus } from '@/lib/enrollment';
+import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus, REACTIVATE_RESET, startYearForMonth, nextWaitingOrder } from '@/lib/enrollment';
 import { PAYMENT_METHOD_LABELS } from '@/lib/payments';
 import { changeEnrollmentLevel, type CourseLevelChangeRow } from '@/lib/courseLevels';
 import { getTodayKST } from '@/lib/date';
@@ -506,11 +506,11 @@ export default function MemberDetailClient({
     // 현재 정원 확인
     const { data: courseEnrollments } = await supabase
       .from('enrollments')
-      .select('id, status')
+      .select('id, status, waiting_order')
       .eq('course_id', courseId);
 
     const activeCount = (courseEnrollments || []).filter(e => e.status === 'active' || e.status === 'paused').length;
-    const waitingCount = (courseEnrollments || []).filter(e => e.status === 'waiting').length;
+    const nextWaiting = nextWaitingOrder(courseEnrollments || []);
 
     const capacity = courseInfo?.capacity || 20;
     const isFull = activeCount >= capacity;
@@ -520,14 +520,14 @@ export default function MemberDetailClient({
       if (!confirm(`${courseName}은 이전에 수강하셨습니다 (수강종료). 다시 신청하시겠습니까?`)) return;
 
       const status = isFull ? 'waiting' : 'active';
-      const waitingOrder = status === 'waiting' ? (waitingCount + 1) : null;
+      const waitingOrder = status === 'waiting' ? nextWaiting : null;
 
       const updateData: any = {
+        ...REACTIVATE_RESET, // 예전 종료일 등 종료 관련 값 모두 비움
         status,
         waiting_order: waitingOrder,
         enrolled_at: new Date().toISOString(),
-        ended_at: null,
-        start_year: new Date().getFullYear(),
+        start_year: startYearForMonth(enrollStartMonth),
         start_month: enrollStartMonth,
       };
       if (useLevels) updateData.course_level_id = courseLevelId;
@@ -547,14 +547,14 @@ export default function MemberDetailClient({
     }
 
     const status = isFull ? 'waiting' : 'active';
-    const waitingOrder = status === 'waiting' ? (waitingCount + 1) : null;
+    const waitingOrder = status === 'waiting' ? nextWaiting : null;
 
     const insertData: any = {
       member_id: member.id,
       course_id: courseId,
       status,
       waiting_order: waitingOrder,
-      start_year: new Date().getFullYear(),
+      start_year: startYearForMonth(enrollStartMonth),
       start_month: enrollStartMonth,
     };
     if (useLevels) insertData.course_level_id = courseLevelId;
@@ -682,26 +682,22 @@ export default function MemberDetailClient({
     // 2) 새 강좌 정원 확인
     const { data: targetEnrollments } = await supabase
       .from('enrollments')
-      .select('id, status')
+      .select('id, status, waiting_order')
       .eq('course_id', target.id);
     const activeCount = (targetEnrollments || []).filter(x => x.status === 'active' || x.status === 'paused').length;
-    const waitingCount = (targetEnrollments || []).filter(x => x.status === 'waiting').length;
     const isFull = activeCount >= target.capacity;
     const newStatus = isFull ? 'waiting' : 'active';
-    const waitingOrder = newStatus === 'waiting' ? (waitingCount + 1) : null;
+    const waitingOrder = newStatus === 'waiting' ? nextWaitingOrder(targetEnrollments || []) : null;
 
     // 3) 새 강좌로 등록 (예전에 이 강좌를 수강종료했던 이력이 있으면 그 행을 재사용, 없으면 신규 생성)
     let enrollErr = null;
     let newEnrollmentId: number | null = null;
     if (existingTarget && existingTarget.status === 'ended') {
       const updateData: any = {
+        ...REACTIVATE_RESET, // 예전 종료일 등 종료 관련 값 모두 비움
         status: newStatus,
         waiting_order: waitingOrder,
         enrolled_at: new Date().toISOString(),
-        ended_at: null,
-        end_date: null,
-        end_reason: null,
-        refund_memo: null,
         start_year: new Date().getFullYear(),
         start_month: new Date().getMonth() + 1,
       };
@@ -838,11 +834,8 @@ export default function MemberDetailClient({
 
     // 신청일(enrolled_at)은 원래 값 유지
     const { error } = await supabase.from('enrollments').update({
+      ...REACTIVATE_RESET, // 종료 관련 값 모두 비움
       status: 'active',
-      end_date: null,
-      end_reason: null,
-      refund_memo: null,
-      ended_at: null,
     }).eq('id', resumingEnrollment.id);
 
     if (error) {

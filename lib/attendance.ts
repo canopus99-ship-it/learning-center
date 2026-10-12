@@ -95,6 +95,7 @@ export type PaymentForPrint = {
   payment_month: number;
   is_paid: boolean;
   refund_date?: string | null;
+  status_type?: string | null;
 };
 
 /**
@@ -102,6 +103,7 @@ export type PaymentForPrint = {
  * - 그 달에 결제완료(is_paid)된 회원만 표시
  * - 환불된 결제도 환불일에 따라 그 달까지는 표시 (16일 이후 환불이면 그 달은 표시)
  * - 종료(ended)된 회원은 종료일이 그 달 이후일 때만, 그 달 결제가 있으면 표시
+ * - 이월로 대기(waiting)가 된 회원도 결제한 달에는 표시 (이월한 달은 수업을 안 들으므로 제외)
  * (app/attendance/[courseId]/CourseAttendanceClient.tsx의 인쇄용 명단 필터와 동일한 규칙 -
  *  여러 강좌를 한번에 출력하는 app/attendance/print/AttendancePrintClient.tsx에서도 그대로 재사용)
  */
@@ -121,11 +123,12 @@ export function filterEnrollmentsForMonthlyPrint<E extends EnrollmentForPrint>(
       );
       return hasPaidThisMonth;
     }
-    if (e.status === 'active' || e.status === 'paused') {
+    if (e.status === 'active' || e.status === 'paused' || e.status === 'waiting') {
       const thisMonthPayment = payments.find(p =>
         p.enrollment_id === e.id && p.payment_year === year && p.payment_month === month && p.is_paid
       );
       if (!thisMonthPayment) return false;
+      if (thisMonthPayment.status_type === 'carryover') return false; // 이월한 달
       if (thisMonthPayment.refund_date) {
         if (thisMonthPayment.refund_date < monthStartStr) return false;
       }

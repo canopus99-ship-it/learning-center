@@ -25,6 +25,7 @@ type PaymentRow = {
   payment_month: number;
   is_paid: boolean;
   refund_date: string | null;
+  status_type: string | null;
 };
 type AttendanceRow = { course_date_id: number; enrollment_id: number; is_present: boolean };
 
@@ -127,7 +128,7 @@ export default function AttendancePrintClient({
           .from('enrollments')
           .select('id, course_id, status, end_date, members(name)')
           .in('course_id', ids)
-          .in('status', ['active', 'paused', 'ended'])
+          .in('status', ['active', 'paused', 'ended', 'waiting'])
           .range(from, to)
       ),
     ]);
@@ -141,7 +142,7 @@ export default function AttendancePrintClient({
         : fetchAllRows<PaymentRow>((from, to) =>
             supabase
               .from('payments')
-              .select('enrollment_id, payment_year, payment_month, is_paid, refund_date')
+              .select('enrollment_id, payment_year, payment_month, is_paid, refund_date, status_type')
               .in('enrollment_id', enrollmentIds)
               .eq('payment_year', selectedYear)
               .eq('payment_month', selectedMonth)

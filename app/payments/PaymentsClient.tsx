@@ -209,7 +209,9 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
         supabase
           .from('enrollments')
           .select('*, members(id, name, phone, region_type, is_jung_gu, is_discount_50, is_discount_100)')
-          .in('status', ['active', 'paused', 'ended'])
+          // 이월로 대기(waiting)가 된 회원도 결제·이월 기록이 보이고 이월 취소를 할 수 있어야 하므로 포함
+          // (이월 없이 처음부터 대기인 회원은 결제 기록이 없으니 제외)
+          .or('status.in.(active,paused,ended),and(status.eq.waiting,carryover_date.not.is.null)')
           .range(from, to)
       ),
       // payments는 연도별로도 1000행을 쉽게 넘을 수 있어(실제로 2026년 1482행 확인됨) 전체를 끝까지 가져옴
@@ -953,11 +955,14 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       const enr = enrollments.find(e => e.member_id === selectedMember?.id && e.course_id === it.courseId);
       if (enr && enr.status !== 'waiting') carriedEnrollmentIds.add(enr.id);
     }
+    // 대기순번: 화면에는 이월 대기자만 불러와 있으므로, DB에서 그 강좌의 실제 대기자 순번을 조회해서 이어서 부여
+    // (예전에는 대기자를 0명으로 보고 매번 1번을 줘서 순번이 겹쳤음)
     const waitingCountByCourse = new Map<number, number>();
-    for (const enr of enrollments) {
-      if (enr.status === 'waiting') {
-        waitingCountByCourse.set(enr.course_id, (waitingCountByCourse.get(enr.course_id) || 0) + 1);
-      }
+    const carriedCourseIds = new Set(Array.from(carriedEnrollmentIds).map(id => enrollments.find(e => e.id === id)?.course_id).filter((v): v is number => !!v));
+    for (const cid of carriedCourseIds) {
+      const { data: w } = await supabase.from('enrollments').select('waiting_order').eq('course_id', cid).eq('status', 'waiting');
+      const maxOrder = Math.max(0, ...((w || []).map((r: { waiting_order: number | null }) => r.waiting_order || 0)));
+      waitingCountByCourse.set(cid, maxOrder);
     }
     let movedToWaiting = 0;
     for (const enrId of carriedEnrollmentIds) {
@@ -984,6 +989,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
   // 환불/이월 취소 (결제 모달에서 호출 - 그 달을 다시 등록 상태로)
   async function clearRefundCarryover(paymentId: number) {
+    const target = payments.find(p => p.id === paymentId);
     const { error } = await supabase.from('payments').update({
       status_type: null,
       refund_amount: null,
@@ -993,8 +999,21 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       carryover_date: null,
       updated_at: new Date().toISOString(),
     }).eq('id', paymentId);
-    if (error) alert('취소 실패: ' + error.message);
-    else loadData();
+    if (error) { alert('취소 실패: ' + error.message); return; }
+
+    // 이월 취소로 이 수강에 남은 이월이 하나도 없으면, 이월 때문에 대기로 갔던 회원을 다시 수강중으로
+    if (target?.status_type === 'carryover') {
+      const enr = enrollments.find(e => e.id === target.enrollment_id);
+      const otherCarry = payments.some(p => p.id !== paymentId && p.enrollment_id === target.enrollment_id && p.status_type === 'carryover');
+      if (enr && enr.status === 'waiting' && !otherCarry) {
+        const { error: e2 } = await supabase.from('enrollments')
+          .update({ status: 'active', waiting_order: null, carryover_date: null })
+          .eq('id', enr.id);
+        if (e2) alert('수강 상태 복구 실패: ' + e2.message);
+        else alert('이월이 취소되어 대기명단에서 빠지고 다시 수강중으로 바뀌었습니다.');
+      }
+    }
+    loadData();
   }
 
   // 이 회원-강좌에서 환불/이월된 가장 빠른 달 (그 다음 달부터 미등록 처리용)
@@ -1174,6 +1193,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       // 정상 납부
       if (p.is_paid) return 'paid';
     }
+    // 이월로 대기 중인 회원은 이후 달이 미납이 아니라 이월 상태
+    if (enrollment.status === 'waiting') return 'carryover';
     // 미납
     return 'unpaid';
   }
@@ -1902,6 +1923,9 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   <Link href={`/members/${e.member_id}`} style={{ color: '#185FA5', textDecoration: 'none' }}><strong>{member.name}</strong></Link>
                                   {e.status === 'paused' && (
                                     <span style={{ marginLeft: 4, fontSize: 10, padding: '1px 5px', background: '#7B3FBF', color: 'white', borderRadius: 3 }}>일시중지</span>
+                                  )}
+                                  {e.status === 'waiting' && (
+                                    <span style={{ marginLeft: 4, fontSize: 10, padding: '1px 5px', background: '#BA7517', color: 'white', borderRadius: 3 }}>이월·대기</span>
                                   )}
                                   {course.use_levels && e.course_level_id && (() => {
                                     const lv = courseLevels.find(l => l.id === e.course_level_id);

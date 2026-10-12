@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { DAY_LABELS, FREQUENCY_LABELS, generateRegularDates, type SessionConfig } from '@/lib/courseDates';
-import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus } from '@/lib/enrollment';
+import { STATUS_LABELS, STATUS_COLORS, type EnrollmentStatus, REACTIVATE_RESET, startYearForMonth, nextWaitingOrder } from '@/lib/enrollment';
 import {
   END_REASON_LABELS, END_REASON_COLORS,
   isBeforeStartMonth, isEndedAtMonth, parseOperationMonths,
@@ -518,12 +518,12 @@ export default function CourseDetailClient({
       if (existing?.status === 'ended') {
         if (!confirm(`${memberName}님은 이전에 이 강좌를 수강하셨습니다. 다시 신청하시겠습니까?`)) return;
         const status = isFull ? 'waiting' : 'active';
-        const waitingOrder = status === 'waiting' ? (waitingList.length + 1) : null;
+        const waitingOrder = status === 'waiting' ? nextWaitingOrder(waitingList) : null;
         await supabase.from('enrollments').update({
+          ...REACTIVATE_RESET, // 예전 종료일 등 종료 관련 값 모두 비움
           status, waiting_order: waitingOrder,
-          enrolled_at: new Date().toISOString(), ended_at: null,
-          end_reason: null, refund_date: null, refund_memo: null,
-          start_year: new Date().getFullYear(), start_month: enrollStartMonth,
+          enrolled_at: new Date().toISOString(),
+          start_year: startYearForMonth(enrollStartMonth), start_month: enrollStartMonth,
           ...(course.use_levels ? { course_level_id: courseLevelId } : {}),
         }).eq('id', existing.id);
         alert(`${memberName}님이 ${status === 'waiting' ? '대기 명단에 추가' : '수강신청'}되었습니다!`);
@@ -536,10 +536,10 @@ export default function CourseDetailClient({
     }
 
     const status = isFull ? 'waiting' : 'active';
-    const waitingOrder = status === 'waiting' ? (waitingList.length + 1) : null;
+    const waitingOrder = status === 'waiting' ? nextWaitingOrder(waitingList) : null;
     const newEnrollment: any = {
       member_id: memberId, course_id: course.id, status, waiting_order: waitingOrder,
-      start_year: new Date().getFullYear(), start_month: enrollStartMonth,
+      start_year: startYearForMonth(enrollStartMonth), start_month: enrollStartMonth,
     };
     if (course.use_levels) {
       newEnrollment.course_level_id = courseLevelId;
@@ -569,22 +569,35 @@ export default function CourseDetailClient({
       updates.carryover_date = null;
       // 대기 → 수강중 전환 등 정상 케이스
     } else if (newStatus === 'waiting') {
-      updates.waiting_order = waitingList.length + 1;
+      updates.waiting_order = nextWaitingOrder(waitingList);
     }
 
     const { error } = await supabase.from('enrollments').update(updates).eq('id', e.id);
-    if (error) alert('변경 실패: ' + error.message);
-    else reloadEnrollments();
+    if (error) { alert('변경 실패: ' + error.message); return; }
+    // 대기에서 빠진 경우 남은 대기자 순번을 1번부터 다시 매김 (빈 번호가 생겨 순번이 겹치지 않게)
+    if (e.status === 'waiting' && newStatus !== 'waiting') {
+      await renumberWaiting(waitingList.filter(w => w.id !== e.id));
+    }
+    reloadEnrollments();
   }
 
+  // 대기자 순번을 화면 순서대로 1, 2, 3... 으로 다시 저장 (바뀐 것만)
+  async function renumberWaiting(list: Enrollment[]) {
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].waiting_order !== i + 1) {
+        await supabase.from('enrollments').update({ waiting_order: i + 1 }).eq('id', list[i].id);
+      }
+    }
+  }
+
+  // 대기순번 위/아래 이동: 순번 값이 아니라 목록상의 위치로 바꿔서, 번호가 비거나 겹쳐 있어도 정상 동작
   async function handleMoveWaitingOrder(e: Enrollment, direction: 'up' | 'down') {
-    const currentOrder = e.waiting_order || 0;
-    const targetOrder = direction === 'up' ? currentOrder - 1 : currentOrder + 1;
-    if (targetOrder < 1 || targetOrder > waitingList.length) return;
-    const target = waitingList.find(w => w.waiting_order === targetOrder);
-    if (!target) return;
-    await supabase.from('enrollments').update({ waiting_order: targetOrder }).eq('id', e.id);
-    await supabase.from('enrollments').update({ waiting_order: currentOrder }).eq('id', target.id);
+    const idx = waitingList.findIndex(w => w.id === e.id);
+    const j = direction === 'up' ? idx - 1 : idx + 1;
+    if (idx < 0 || j < 0 || j >= waitingList.length) return;
+    const list = [...waitingList];
+    [list[idx], list[j]] = [list[j], list[idx]];
+    await renumberWaiting(list);
     reloadEnrollments();
   }
 

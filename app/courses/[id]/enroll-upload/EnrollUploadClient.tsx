@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { REACTIVATE_RESET } from '@/lib/enrollment';
 import { fetchAllRows } from '@/lib/fetchAll';
 import { getTodayKST } from '@/lib/date';
 import * as XLSX from 'xlsx';
@@ -295,12 +296,8 @@ export default function EnrollUploadClient({ course, levels }: { course: Course;
     for (const r of resumeRows) {
       if (!r.existingEnrollmentId) continue;
       const updateData: any = {
+        ...REACTIVATE_RESET, // 종료 관련 값 모두 비움
         status: 'active',
-        end_date: null,
-        end_reason: null,
-        end_from_year: null,
-        end_from_month: null,
-        ended_at: null,
         // 재개 시 신청일도 갱신
         enrolled_at: today,
       };

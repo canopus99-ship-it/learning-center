@@ -39,7 +39,8 @@ export default async function CourseAttendancePage({
       .from('enrollments')
       .select('*, members(id, name, phone, birth_date, region_type)')
       .eq('course_id', courseId)
-      .in('status', ['active', 'paused', 'ended']),
+      // waiting: 이월로 대기가 된 회원도 결제했던 달의 출석부에는 나와야 함 (명단 필터에서 달별로 판정)
+      .in('status', ['active', 'paused', 'ended', 'waiting']),
   ]);
 
   if (!courseRes.data) notFound();
@@ -61,7 +62,7 @@ export default async function CourseAttendancePage({
       : fetchAllRows<any>((from, to) =>
           supabase
             .from('payments')
-            .select('id, enrollment_id, payment_year, payment_month, is_paid, refund_date')
+            .select('id, enrollment_id, payment_year, payment_month, is_paid, refund_date, status_type')
             .in('enrollment_id', courseEnrollmentIds)
             .range(from, to)
         ),
