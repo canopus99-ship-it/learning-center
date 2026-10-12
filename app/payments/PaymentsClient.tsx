@@ -917,6 +917,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     } else {
       alert(`${memberName}님 / ${courseName}\n${reEnrollDate}자로 수강 재개되었습니다.\n이전 결제·출석 기록은 그대로 유지됩니다.`);
       setReEnrollModalOpen(false);
+      const reCourse = courses.find(c => c.id === reEnrollEnrollment.course_id);
+      // 무료강좌는 다시 등록한 뒤 바로 참여 기간 '등록 확인' 창을 띄움 (재개일이 속한 달부터)
+      if (reCourse?.is_free && reEnrollDate.substring(0, 4) === String(selectedYear)) {
+        openFreeConfirm({ ...reEnrollEnrollment, status: 'active' } as Enrollment, reCourse, parseInt(reEnrollDate.substring(5, 7), 10));
+      }
       setReEnrollEnrollment(null);
       loadData();
     }
@@ -2035,7 +2040,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                 <td style={tdStyle}>{p?.paid_at || '-'}</td>
                                 <td style={tdStyle}>
                                   <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                                    {course.is_free ? (
+                                    {course.is_free && e.status === 'ended' ? (
+                                      // 수강 종료한 무료강좌 회원: 확인/취소 대신 '다시 등록' (마음이 바뀌어 다시 참여하는 경우)
+                                      <button onClick={() => openReEnrollModal(e)}
+                                        style={{ ...smallBtnStyle, color: '#1D9E75', borderColor: '#1D9E75' }}
+                                        title="종료를 풀고 다시 참여 → 이어서 참여 기간 등록 확인">↻ 다시 등록</button>
+                                    ) : course.is_free ? (
                                       p?.is_paid ? (
                                         <button onClick={() => cancelFreeConfirm(e, selectedMonth)} style={{ ...smallBtnStyle, color: '#888' }}
                                           title="이 달부터 등록 확인을 취소합니다">확인 취소</button>
