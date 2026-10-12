@@ -162,11 +162,9 @@ export default function CourseStatsClient() {
       setLoading(false);
       return;
     }
-    // 신규인원 계산을 위해 전월 데이터도 함께 로드
+    // 신규인원(그 해 처음 출석한 사람) 계산을 위해, 조회 시작월이 속한 해의 1월부터 함께 로드
     const firstMonth = months[0];
-    const prevY = firstMonth.m === 1 ? firstMonth.y - 1 : firstMonth.y;
-    const prevM = firstMonth.m === 1 ? 12 : firstMonth.m - 1;
-    const first = monthBounds(prevY, prevM);
+    const first = monthBounds(firstMonth.y, 1);
     const last = monthBounds(months[months.length - 1].y, months[months.length - 1].m);
 
     // 회원/강좌 수가 늘면 1000행을 넘을 수 있어 전부 페이지 단위로 끝까지 가져옴
@@ -240,7 +238,7 @@ export default function CourseStatsClient() {
   //   (휴강 여부(is_cancelled) 플래그가 아니라 실제 출석 기록 유무로 판정.
   //    긴급 휴강 등으로 담당자가 일정을 미처 지우지 못해도, 출석체크가 없으면 자동으로 빠짐)
   // - 실인원: 그 달에 출석한 적이 있는 회원 수 (member_id 중복 제거)
-  // - 신규인원: 그 달 실인원 중 "전월 실인원"에 없던 사람
+  // - 신규인원: 그 달 실인원 중 "그 해(1월~전월)에 이 강좌에 출석한 적이 없는" 사람 (그 해 첫 출석월에 1번만 셈)
   // - 연인원: 그 달의 출석체크 수 합계
   const courseStats = useMemo(() => {
     // enrollment_id → member_id 매핑
@@ -294,12 +292,6 @@ export default function CourseStatsClient() {
       lessonSessionDates.get(key)!.add(a.attend_date);
     });
 
-    // 전월 키 계산 헬퍼
-    function prevMonthKey(y: number, m: number): string {
-      if (m === 1) return `${y - 1}-12`;
-      return `${y}-${m - 1}`;
-    }
-
     const result = new Map<number, { course: Course; perMonth: Map<string, MonthlyStat>; total: MonthlyStat }>();
 
     courses.forEach(course => {
@@ -317,8 +309,10 @@ export default function CourseStatsClient() {
         const sessions = course.is_lesson
           // 레슨 강좌: course_dates가 없으므로 lesson_attendance 기준 "출석이 있었던 날짜 수"로 집계
           ? (lessonSessionDates.get(`${course.id}-${monthKey}`)?.size || 0)
+          // 일반 강좌: 그 달 수업일 중 출석인원이 1명 이상 있었던 날만 (출석 0명 = 운영 안 한 날,
+          // 아직 오지 않은 날짜도 자동 제외. 강사료 화면과 같은 기준)
           : courseDates.filter(d =>
-              d.course_id === course.id && !d.is_cancelled &&
+              d.course_id === course.id && datesWithAttendance.has(d.id) &&
               d.class_date >= start && d.class_date <= end
             ).length;
 
@@ -326,12 +320,15 @@ export default function CourseStatsClient() {
         const thisMonthSet = attendedMembers.get(`${course.id}-${monthKey}`) || new Set<number>();
         const realCount = thisMonthSet.size;
 
-        // 신규인원 = 그 달 출석회원 중 전월 출석회원에 없던 사람
-        const prevKey = prevMonthKey(y, m);
-        const prevMonthSet = attendedMembers.get(`${course.id}-${prevKey}`) || new Set<number>();
+        // 신규인원 = 그 달 출석회원 중 같은 해 1월~전월에 이 강좌 출석 기록이 없는 사람
+        // (결석 후 돌아온 기존 회원·이월 회원은 신규가 아님. 해가 바뀌면 다시 신규로 셈)
         let newCount = 0;
         thisMonthSet.forEach(mid => {
-          if (!prevMonthSet.has(mid)) newCount++;
+          let seenEarlier = false;
+          for (let pm = 1; pm < m; pm++) {
+            if (attendedMembers.get(`${course.id}-${y}-${pm}`)?.has(mid)) { seenEarlier = true; break; }
+          }
+          if (!seenEarlier) newCount++;
         });
 
         // 연인원
@@ -877,7 +874,7 @@ export default function CourseStatsClient() {
           <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
             <li><strong>강의 횟수</strong>: 해당 월 수업 날짜 중 출석인원이 1명 이상 있었던 실제 진행 횟수 (휴강 표시 여부와 무관하게, 출석 기록이 없는 날은 자동 제외)</li>
             <li><strong>실인원</strong>: 해당 월 출석부에 등록된 회원 수 (한 번이라도 출석한 사람, 중복 제거)</li>
-            <li><strong>신규인원</strong>: 실인원 중 전월 출석부에 없던 사람</li>
+            <li><strong>신규인원</strong>: 실인원 중 그 해에 처음 출석한 사람 (같은 해 이전 달에 이 강좌 출석 기록이 없는 사람. 결석 후 돌아온 회원은 신규 아님)</li>
             <li><strong>연인원</strong>: 해당 월 출석 횟수의 총합</li>
             <li><strong>합계의 실인원</strong>: 전체 기간 동안 한 번이라도 출석한 회원 수 (중복 제거)</li>
           </ul>
