@@ -144,6 +144,8 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   // 일괄 결제 모달
   const [bulkPayModalOpen, setBulkPayModalOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  // 수정 모달을 열 때의 결제방법/결제일/영수증번호 (직원이 실제로 바꾼 항목만 저장하기 위해 기억)
+  const [editInitial, setEditInitial] = useState<{ method: string; date: string; receipt: string } | null>(null);
   const [bulkPayMethod, setBulkPayMethod] = useState<PaymentMethod>('cash');
   const [bulkPayDate, setBulkPayDate] = useState(getTodayKST());
   const [bulkReceiptNum, setBulkReceiptNum] = useState('');
@@ -447,13 +449,57 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setBulkPayMethod((first.payment_method as any) || 'cash');
     setBulkPayDate(first.paid_at || getTodayKST());
     setBulkReceiptNum(first.receipt_number || '');
+    setEditInitial({
+      method: (first.payment_method as any) || 'cash',
+      date: first.paid_at || getTodayKST(),
+      receipt: first.receipt_number || '',
+    });
     setIsEditMode(true);
     setBulkPayModalOpen(true);
+  }
+
+  // 수정 저장: 이미 결제된(등록/환불/이월) 셀만 대상으로, 금액과 "직원이 실제로 바꾼 항목"만 수정.
+  // (예전에는 선택한 셀 전체를 결제완료로 저장해서, 미납 월이 섞여 있으면 그 달이 결제완료가 되고
+  //  첫 항목의 결제일·영수증번호가 모든 달에 덮어써지는 문제가 있었음)
+  async function handleBulkEditSave() {
+    if (!selectedMember) return;
+    const items = getSelectedPaidItems();
+    if (items.length === 0) return;
+    const init = editInitial;
+    const methodChanged = !!init && bulkPayMethod !== init.method;
+    const dateChanged = !!init && bulkPayDate !== init.date;
+    const receiptChanged = !!init && bulkReceiptNum !== init.receipt;
+    if ((methodChanged || dateChanged || receiptChanged) && items.length > 1) {
+      const changed = [methodChanged && '결제방법', dateChanged && '결제일', receiptChanged && '영수증번호'].filter(Boolean).join(', ');
+      if (!confirm(`${changed}을(를) 선택한 ${items.length}건 모두에 같은 값으로 바꿉니다.\n계속하시겠습니까?`)) return;
+    }
+
+    let hasError = false;
+    for (const it of items) {
+      const patch: Record<string, unknown> = {
+        amount: cellAmounts[`${it.courseId}-${it.month}`] ?? it.payment.amount,
+        updated_at: new Date().toISOString(),
+      };
+      if (methodChanged) patch.payment_method = bulkPayMethod;
+      if (dateChanged) patch.paid_at = bulkPayDate;
+      if (receiptChanged) patch.receipt_number = bulkReceiptNum || null;
+      const { error } = await supabase.from('payments').update(patch).eq('id', it.payment.id);
+      if (error) { hasError = true; console.error('결제 수정 실패:', error); }
+    }
+
+    alert(hasError ? '일부 수정에 실패했습니다.' : `${selectedMember.name}님의 결제 정보가 수정되었습니다.`);
+    setBulkPayModalOpen(false);
+    setIsEditMode(false);
+    setEditInitial(null);
+    setSelectedCells(new Set());
+    setSelectedAnnualCourses(new Set());
+    loadData();
   }
 
   // 일괄 결제 저장
   async function handleBulkSave() {
     if (!selectedMember) return;
+    if (isEditMode) { await handleBulkEditSave(); return; }
     const { items } = calculateSelectionTotal();
     if (items.length === 0) return;
 
@@ -476,17 +522,22 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
       ); })();
 
       if (item.isAnnual) {
-        // 연납: 2~12월 각각 결제 기록 생성 (1월 OT 제외)
+        // 연납 (운영세칙): 10개월분(2~11월)을 선납하면 12월분 수강료 무료.
+        // → 2~11월에 10개월분을 나눠 기록하고 12월은 0원으로 기록 (기록 합계 = 실제 받은 금액).
+        //   중도 환불 시 월별 기록 그대로 '들은 달 제외' 환불이 되도록 하기 위함.
+        // 금액을 수기로 바꿔 10으로 나누어떨어지지 않으면 나머지 원 단위는 11월에 더함.
         const totalAmount = cellAmounts[`annual-${item.courseId}`] ?? item.amount;
         const perMonthAmount = Math.floor(totalAmount / 10);
+        const remainder = totalAmount - perMonthAmount * 10;
 
         for (let m = 2; m <= 12; m++) {
           const existingPayment = getPayment(enrollment.id, m);
+          const monthAmount = m === 12 ? 0 : m === 11 ? perMonthAmount + remainder : perMonthAmount;
           const data = {
             enrollment_id: enrollment.id,
             payment_year: selectedYear,
             payment_month: m,
-            amount: perMonthAmount,
+            amount: monthAmount,
             is_paid: true,
             paid_at: bulkPayDate,
             payment_method: bulkPayMethod,
@@ -2325,7 +2376,7 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                       <div style={{ flex: 1 }}>
                         <strong style={{ fontSize: 13 }}>{item.courseName}</strong>
                         <span style={{ fontSize: 11, color: '#888', marginLeft: 8 }}>
-                          {item.isAnnual ? '연납 (2~12월)' : `${item.month}월`}
+                          {item.isAnnual ? '연납 (2~11월 납부 · 12월 무료)' : `${item.month}월`}
                         </span>
                       </div>
                       <input
