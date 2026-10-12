@@ -22,7 +22,7 @@ type EnrollmentRow = {
   member_id: number;
   course_level_id: number | null;
   members: { id: number; name: string } | { id: number; name: string }[] | null;
-  courses: { name: string } | { name: string }[] | null;
+  courses: { name: string; is_free?: boolean } | { name: string; is_free?: boolean }[] | null;
 };
 
 type CourseLevelRow = { id: number; level_name: string };
@@ -90,7 +90,7 @@ export default function DailyReportClient({ initialDate }: { initialDate: string
     const enrollmentIds = Array.from(new Set(validPayments.map((p) => p.enrollment_id)));
     const { data: enrollmentsData } = await supabase
       .from('enrollments')
-      .select('id, member_id, course_level_id, members(id, name), courses(name)')
+      .select('id, member_id, course_level_id, members(id, name), courses(name, is_free)')
       .in('id', enrollmentIds);
 
     const enrMap = new Map<number, EnrollmentRow>();
@@ -119,8 +119,9 @@ export default function DailyReportClient({ initialDate }: { initialDate: string
       const enr = enrMap.get(p.enrollment_id);
       if (!enr) return;
       const memberObj = unwrap<{ id: number; name: string }>(enr.members);
-      const courseObj = unwrap<{ name: string }>(enr.courses);
+      const courseObj = unwrap<{ name: string; is_free?: boolean }>(enr.courses);
       if (!memberObj) return;
+      if (courseObj?.is_free) return; // 무료강좌 '등록 확인'은 결제가 아니므로 일별결제현황에서 제외
 
       const baseCourseName = courseObj?.name || '-';
       // 이 결제건에 등급이 스냅샷되어 있으면 그걸 우선 사용(승급 전후 관계없이 그 당시 등급 그대로).

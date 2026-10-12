@@ -28,7 +28,7 @@ type EnrollmentRow = {
   course_id: number;
   course_level_id: number | null;
   members: { id: number; name: string; phone: string | null } | { id: number; name: string; phone: string | null }[] | null;
-  courses: { name: string } | { name: string }[] | null;
+  courses: { name: string; is_free?: boolean } | { name: string; is_free?: boolean }[] | null;
 };
 
 type CourseLevelRow = { id: number; level_name: string };
@@ -89,7 +89,7 @@ export default function ReceiptClient({ ids }: { ids: number[] }) {
     }
 
     // 결제완료 & 환불/이월되지 않은 건만 (안전장치 - 이미 호출하는 쪽에서 걸러서 넘겨줘야 함)
-    const validPayments = (paymentsData as PaymentRow[]).filter((p) => p.is_paid && !p.status_type);
+    let validPayments = (paymentsData as PaymentRow[]).filter((p) => p.is_paid && !p.status_type);
     if (validPayments.length === 0) {
       setError('선택한 항목 중 영수증으로 출력할 수 있는 결제완료 내역이 없습니다.\n(환불·이월된 건은 제외됩니다)');
       setLoading(false);
@@ -99,7 +99,7 @@ export default function ReceiptClient({ ids }: { ids: number[] }) {
     const enrollmentIds = Array.from(new Set(validPayments.map((p) => p.enrollment_id)));
     const { data: enrollmentsData, error: eErr } = await supabase
       .from('enrollments')
-      .select('id, member_id, course_id, course_level_id, members(id, name, phone), courses(name)')
+      .select('id, member_id, course_id, course_level_id, members(id, name, phone), courses(name, is_free)')
       .in('id', enrollmentIds);
 
     if (eErr || !enrollmentsData || enrollmentsData.length === 0) {
@@ -111,6 +111,17 @@ export default function ReceiptClient({ ids }: { ids: number[] }) {
     const enrRows = enrollmentsData as unknown as EnrollmentRow[];
     const enrMap = new Map<number, EnrollmentRow>();
     enrRows.forEach((e) => enrMap.set(e.id, e));
+    // 무료강좌 '등록 확인' 기록은 결제가 아니므로 영수증에서 제외
+    validPayments = validPayments.filter((p) => {
+      const enr = enrMap.get(p.enrollment_id);
+      const c = enr ? (Array.isArray(enr.courses) ? enr.courses[0] : enr.courses) : null;
+      return !c?.is_free;
+    });
+    if (validPayments.length === 0) {
+      setError('영수증으로 출력할 결제가 없습니다. (무료강좌 등록 확인은 영수증 대상이 아닙니다)');
+      setLoading(false);
+      return;
+    }
 
     // 등급(초급/중급/고급 등)이 걸린 수강신청이 있으면 등급명도 함께 조회
     // (피아노교실처럼 강좌 하나에 등급별로 수강료가 다른 경우, 영수증 강좌명에 "강좌명 - 등급명"으로 표시)

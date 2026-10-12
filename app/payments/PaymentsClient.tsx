@@ -144,6 +144,11 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
   // 일괄 결제 모달
   const [bulkPayModalOpen, setBulkPayModalOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  // 무료강좌 등록 확인 모달 (결제 대신 담당자가 교육 기간만큼 한 번에 출석부 등록을 확인)
+  const [freeConfirm, setFreeConfirm] = useState<{ enrollment: Enrollment; course: Course } | null>(null);
+  const [freeFrom, setFreeFrom] = useState(1);
+  const [freeTo, setFreeTo] = useState(12);
+  const [freeSaving, setFreeSaving] = useState(false);
   // 수정 모달을 열 때의 결제방법/결제일/영수증번호 (직원이 실제로 바꾼 항목만 저장하기 위해 기억)
   const [editInitial, setEditInitial] = useState<{ method: string; date: string; receipt: string } | null>(null);
   const [bulkPayMethod, setBulkPayMethod] = useState<PaymentMethod>('cash');
@@ -637,6 +642,67 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
     setReceiptNum(existing?.receipt_number || '');
     setPayMemo(existing?.memo || '');
     setPaymentModalOpen(true);
+  }
+
+  // ===== 무료강좌 등록 확인 =====
+  // 무료강좌(강좌 자체가 무료)는 결제 대신 담당자가 [등록 확인]을 한 번 눌러 교육 기간(운영월)만큼
+  // 출석부 등록을 확정한다. 내부적으로는 출석부·통계가 쓰는 월별 등록 기록(0원, 결제방법 없음)을 만들어
+  // 기존 화면들과 그대로 연결되고, 일별결제현황·영수증에서는 빠진다.
+  // ※ 유료강좌를 감면(100%)으로 0원 내는 경우는 지금처럼 결제처리로 함 (course.is_free로 구분)
+  function openFreeConfirm(enrollment: Enrollment, course: Course, defaultMonth: number) {
+    const ops = parseOperationMonths(course.operation_months);
+    const from = ops.find(m => m >= defaultMonth) ?? ops[0] ?? defaultMonth;
+    const to = ops.length ? ops[ops.length - 1] : 12;
+    setFreeFrom(from);
+    setFreeTo(Math.max(from, to));
+    setFreeConfirm({ enrollment, course });
+  }
+
+  async function saveFreeConfirm() {
+    if (!freeConfirm) return;
+    if (!confirmOtherYear()) return;
+    const { enrollment, course } = freeConfirm;
+    const ops = parseOperationMonths(course.operation_months).filter(m => m >= freeFrom && m <= freeTo);
+    const targets = ops.filter(m => !getPayment(enrollment.id, m)?.is_paid);
+    if (targets.length === 0) { alert('선택한 기간은 이미 모두 등록 확인되어 있습니다.'); return; }
+    setFreeSaving(true);
+    const today = getTodayKST();
+    let hasError = false;
+    for (const m of targets) {
+      const { error } = await supabase.from('payments').upsert({
+        enrollment_id: enrollment.id,
+        payment_year: selectedYear,
+        payment_month: m,
+        amount: 0,
+        is_paid: true,
+        paid_at: today,
+        payment_method: null,
+        receipt_number: null,
+        is_annual: false,
+        is_free: true,
+        discount_type: null,
+        memo: '무료강좌 등록확인',
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'enrollment_id,payment_year,payment_month' });
+      if (error) { hasError = true; console.error('등록 확인 실패:', error); }
+    }
+    setFreeSaving(false);
+    alert(hasError ? '일부 등록 확인에 실패했습니다.' : `${enrollment.members?.name || '회원'}님 ${targets.join(', ')}월 등록이 확인되었습니다.`);
+    setFreeConfirm(null);
+    loadData();
+  }
+
+  // 등록 확인 취소: 선택한 달부터 이후 달의 확인 기록을 지움 (기간을 잘못 잡았거나 참여가 취소된 경우)
+  async function cancelFreeConfirm(enrollment: Enrollment, fromMonth: number) {
+    const rows = payments.filter(p =>
+      p.enrollment_id === enrollment.id && p.payment_year === selectedYear &&
+      p.payment_month >= fromMonth && p.amount === 0 && !p.status_type
+    );
+    if (rows.length === 0) { alert('취소할 등록 확인 기록이 없습니다.'); return; }
+    if (!confirm(`${enrollment.members?.name || '회원'}님의 ${rows.map(r => r.payment_month).sort((a, b) => a - b).join(', ')}월 등록 확인을 취소합니다.\n그 달 출석부에서 빠집니다. (이미 입력된 출석 기록은 지워지지 않습니다)\n\n아예 그만둔 경우라면 '종료'로 처리하는 것이 좋습니다. 계속할까요?`)) return;
+    const { error } = await supabase.from('payments').delete().in('id', rows.map(r => r.id));
+    if (error) alert('취소 실패: ' + error.message);
+    loadData();
   }
 
   // 화면에서 올해가 아닌 연도가 선택된 채로 결제를 처리하면 확인 (예: 2025년으로 선택된 채 연납을 처리해
@@ -1518,6 +1584,13 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                   </span>
                                 </div>
                                 <div style={{ display: 'flex', gap: 4 }}>
+                                  {course.is_free && !isCourseEnded && (
+                                    <button
+                                      onClick={() => openFreeConfirm(enrollment, course, selectedYear === todayYear ? todayMonth : 1)}
+                                      style={{ ...smallBtnStyle, background: '#1D9E75', color: 'white', borderColor: '#1D9E75' }}
+                                      title="무료강좌: 교육 기간만큼 한 번에 출석부 등록을 확인합니다"
+                                    >✅ 등록 확인</button>
+                                  )}
                                   {isCourseEnded ? (
                                     <button onClick={() => openReEnrollModal(enrollment)} style={{
                                       ...smallBtnStyle,
@@ -1587,6 +1660,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                     bgColor = '#3F3F3F';
                                     textColor = 'white';
                                     canSelect = true; // 클릭 시 재등록 모달
+                                  } else if (course.is_free) {
+                                    // 무료강좌: 결제 대상이 아니므로 칸 선택 불가 → 위 [등록 확인] 버튼으로 처리
+                                    canSelect = false;
+                                    if (isPaid) { label = '확인'; bgColor = '#1D9E75'; textColor = 'white'; }
+                                    else if (isBeforeStartMonth(enrollment, selectedYear, month)) { label = ''; bgColor = '#ededed'; textColor = '#ccc'; }
+                                    else { label = '미확인'; bgColor = '#fafafa'; textColor = '#E8820E'; }
                                   } else if (isPaid) {
                                     label = isOTMonth ? '등록 (OT)' : '등록';
                                     bgColor = '#1D9E75';
@@ -1910,7 +1989,12 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
 
                             let statusLabel = '';
                             let statusColor = '#888';
-                            if (p?.is_paid) {
+                            if (course.is_free) {
+                              // 무료강좌: 결제가 아니라 담당자 '등록 확인' 여부
+                              if (p?.is_paid) { statusLabel = '✓ 등록확인'; statusColor = '#1D9E75'; }
+                              else if (isBeforeStartMonth(e, selectedYear, selectedMonth)) { statusLabel = '신청전'; statusColor = '#bbb'; }
+                              else { statusLabel = '확인 필요'; statusColor = '#E8820E'; }
+                            } else if (p?.is_paid) {
                               statusLabel = '✓ 등록';
                               statusColor = '#1D9E75';
                             } else if (isBeforeStartMonth(e, selectedYear, selectedMonth)) {
@@ -1951,9 +2035,21 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
                                 <td style={tdStyle}>{p?.paid_at || '-'}</td>
                                 <td style={tdStyle}>
                                   <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                                    <button onClick={() => openPaymentModal(e, course, selectedMonth)} style={smallBtnStyle}>
-                                      {p?.is_paid ? '수정' : '결제처리'}
-                                    </button>
+                                    {course.is_free ? (
+                                      p?.is_paid ? (
+                                        <button onClick={() => cancelFreeConfirm(e, selectedMonth)} style={{ ...smallBtnStyle, color: '#888' }}
+                                          title="이 달부터 등록 확인을 취소합니다">확인 취소</button>
+                                      ) : (
+                                        <button onClick={() => openFreeConfirm(e, course, selectedMonth)}
+                                          style={{ ...smallBtnStyle, background: '#1D9E75', color: 'white', borderColor: '#1D9E75' }}>
+                                          ✅ 등록 확인
+                                        </button>
+                                      )
+                                    ) : (
+                                      <button onClick={() => openPaymentModal(e, course, selectedMonth)} style={smallBtnStyle}>
+                                        {p?.is_paid ? '수정' : '결제처리'}
+                                      </button>
+                                    )}
                                     {course.use_levels && e.status !== 'ended' && (
                                       <button
                                         onClick={() => openLevelChangeModal(e, course)}
@@ -2379,6 +2475,46 @@ export default function PaymentsClient({ staffName }: { staffName: string }) {
           </div>
         </div>
       )}
+
+      {/* 무료강좌 등록 확인 모달 */}
+      {freeConfirm && (() => {
+        const ops = parseOperationMonths(freeConfirm.course.operation_months);
+        const inRange = ops.filter(m => m >= freeFrom && m <= freeTo);
+        const already = inRange.filter(m => getPayment(freeConfirm.enrollment.id, m)?.is_paid);
+        return (
+          <div style={modalOverlayStyle}>
+            <div style={{ ...modalContentStyle, maxWidth: 460 }}>
+              <h2 style={{ fontSize: 18, margin: '0 0 8px' }}>✅ 무료강좌 등록 확인</h2>
+              <p style={{ fontSize: 13, color: '#666', margin: '0 0 16px', lineHeight: 1.6 }}>
+                <strong>{freeConfirm.enrollment.members?.name}</strong>님 · {freeConfirm.course.name}<br />
+                교육 기간을 확인하면 그 기간의 출석부에 한 번에 등록됩니다. (수납·영수증·일별결제현황에는 나오지 않음)
+              </p>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+                <label style={{ ...labelStyle, margin: 0 }}>{selectedYear}년</label>
+                <select value={freeFrom} onChange={e => { const v = parseInt(e.target.value, 10); setFreeFrom(v); if (freeTo < v) setFreeTo(v); }} style={{ ...inputStyle, width: 'auto' }}>
+                  {ops.map(m => <option key={m} value={m}>{m}월</option>)}
+                </select>
+                <span>~</span>
+                <select value={freeTo} onChange={e => setFreeTo(parseInt(e.target.value, 10))} style={{ ...inputStyle, width: 'auto' }}>
+                  {ops.filter(m => m >= freeFrom).map(m => <option key={m} value={m}>{m}월</option>)}
+                </select>
+              </div>
+              <div style={{ fontSize: 12, color: '#555', background: '#f7f7f7', borderRadius: 6, padding: 10, marginBottom: 16 }}>
+                등록할 달: {inRange.filter(m => !already.includes(m)).map(m => `${m}월`).join(', ') || '없음'}
+                {already.length > 0 && <div style={{ color: '#888', marginTop: 4 }}>이미 확인된 달: {already.map(m => `${m}월`).join(', ')}</div>}
+                <div style={{ color: '#888', marginTop: 4 }}>중간에 그만두면 '종료', 기간을 잘못 잡았으면 강좌별 보기의 '확인 취소'를 사용하세요.</div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button onClick={() => setFreeConfirm(null)} style={secondaryBtnStyle}>취소</button>
+                <button onClick={saveFreeConfirm} disabled={freeSaving} style={{
+                  padding: '10px 20px', background: '#1D9E75', color: 'white', border: 'none', borderRadius: 8,
+                  cursor: freeSaving ? 'wait' : 'pointer', fontSize: 14, fontWeight: 600,
+                }}>{freeSaving ? '저장 중...' : '등록 확인'}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ============================================ */}
       {/* 일괄 결제 모달 (회원별 보기에서)               */}

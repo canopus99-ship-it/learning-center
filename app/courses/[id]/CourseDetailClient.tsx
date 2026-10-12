@@ -564,7 +564,7 @@ export default function CourseDetailClient({
           start_year: startYearForMonth(enrollStartMonth), start_month: enrollStartMonth,
           ...(course.use_levels ? { course_level_id: courseLevelId } : {}),
         }).eq('id', existing.id);
-        alert(`${memberName}님이 ${status === 'waiting' ? '대기 명단에 추가' : '수강신청'}되었습니다!`);
+        alert(`${memberName}님이 ${status === 'waiting' ? '대기 명단에 추가' : '수강신청'}되었습니다!${status === 'active' && course.is_free ? '\n\n※ 무료강좌는 수납관리에서 [✅ 등록 확인]을 눌러 교육 기간을 확인해야 출석부에 올라갑니다.' : ''}`);
         reloadEnrollments();
         return;
       } else {
@@ -585,7 +585,7 @@ export default function CourseDetailClient({
     const { error } = await supabase.from('enrollments').insert([newEnrollment]);
     if (error) alert('수강신청 실패: ' + error.message);
     else {
-      alert(`${memberName}님이 ${status === 'waiting' ? `대기 ${waitingOrder}순위에 추가` : '수강신청'}되었습니다!`);
+      alert(`${memberName}님이 ${status === 'waiting' ? `대기 ${waitingOrder}순위에 추가` : '수강신청'}되었습니다!${status === 'active' && course.is_free ? '\n\n※ 무료강좌는 수납관리에서 [✅ 등록 확인]을 눌러 교육 기간을 확인해야 출석부에 올라갑니다.' : ''}`);
       reloadEnrollments();
     }
   }
@@ -612,6 +612,9 @@ export default function CourseDetailClient({
 
     const { error } = await supabase.from('enrollments').update(updates).eq('id', e.id);
     if (error) { alert('변경 실패: ' + error.message); return; }
+    if (e.status === 'waiting' && newStatus === 'active' && course.is_free) {
+      alert(`${memberName}님이 수강중으로 바뀌었습니다.\n\n※ 무료강좌는 수납관리에서 [✅ 등록 확인]을 눌러 참여 기간을 확인해야 출석부에 올라갑니다.`);
+    }
     // 대기에서 빠진 경우 남은 대기자 순번을 1번부터 다시 매김 (빈 번호가 생겨 순번이 겹치지 않게)
     if (e.status === 'waiting' && newStatus !== 'waiting') {
       await renumberWaiting(waitingList.filter(w => w.id !== e.id));
