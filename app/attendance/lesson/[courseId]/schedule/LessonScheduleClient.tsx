@@ -432,31 +432,103 @@ export default function LessonScheduleClient({
 
   // 고정 시간 영구 변경 (요일도 함께 변경 가능)
   //
-  // 예전에는 기존 행(row)을 그대로 update해서, 과거에 등록되어 있던 시간까지 전부 바뀌어버리는
-  // 문제가 있었음. 이제는 기존 행은 "여기까지만 유효했다(effective_until)"로 마감하고,
-  // 새 요일/시간은 새 행으로 따로 등록해서 앞으로의 스케줄에만 적용되도록 함.
-  // (과거 출석 기록은 계속 예전 행의 id를 참조하므로 그대로 유지됨)
+  // 기존 행(row)은 "여기까지만 유효했다(effective_until)"로 마감하고, 새 요일/시간은 새 행으로 등록해서
+  // 앞으로의 스케줄에만 적용 (과거 출석 기록은 예전 행의 id를 계속 참조하므로 그대로 유지됨)
   //
-  // 적용 시작 주는 "지금 보고 있는 주"와 "이번 주(오늘 기준)" 중 더 늦은 쪽으로 함:
-  // 과거 주를 보다가 실수로 눌러도 과거 기록은 절대 건드리지 않고, 미리 몇 주 뒤를 보면서
-  // 미래 시점으로 예약하는 것은 그대로 가능하게 하기 위함.
+  // 적용 시작 주 = "지금 보고 있는 주"와 "이번 주" 중 더 늦은 쪽.
+  // 이번 주부터 적용하는 경우, 날짜가 아니라 '출석 기록'으로 판단 (2026-10-16 하이 결정):
+  //  - 이번 주에 이 스케줄로 이미 출석한 레슨이 있으면 → 다음 주부터 (이미 한 레슨이 어긋나지 않게)
+  //  - 새 요일이 이번 주에 이미 지났으면(오늘은 지난 것으로 보지 않음) → 다음 주부터 (지난 날짜에 가짜 결석 방지)
+  //  - 그 외 → 이번 주부터 바로 적용 (예: 금요일 레슨을 금요일 당일에 시간만 변경)
+  //
+  // 중복 방지:
+  //  - 고르는 스케줄이 '적용 시작 주'부터 시작하는 행이면(방금 만든 변경을 다시 고치는 경우) 새 행을 만들지 않고 그 행을 수정
+  //  - 이미 다른 주부터 바뀌도록 예약된 변경이 있으면, 그 예약을 지우고 새 내용으로 대체 (확인창)
   async function handlePermanentChange() {
     if (!selectedFixed) return;
     const todayMonday = getMonday(today);
+    const todayMondayStr = ymd(todayMonday);
     let changeFromMonday = weekStart > todayMonday ? weekStart : todayMonday;
-    // 이번 주부터 바꾸려는데 예전 요일이나 새 요일이 이번 주에 이미 지났거나 오늘이면, 다음 주부터 적용
-    // (이미 지난 요일에 가짜 '예정 레슨'이 생기거나, 이번 주에 이미 한 레슨이 어긋나는 것을 막기 위함.
-    //  이번 주만 바꿀 필요가 있으면 '이번 주만 변경'을 사용)
-    const todayDow = (today.getDay() + 6) % 7; // 0=월~6=일
-    let movedToNextWeek = false;
-    if (ymd(changeFromMonday) === ymd(todayMonday) && (selectedFixed.day_of_week <= todayDow || formDay <= todayDow)) {
-      changeFromMonday = addDays(todayMonday, 7);
-      movedToNextWeek = true;
+    let deferReason = '';
+
+    if (ymd(changeFromMonday) === todayMondayStr) {
+      const todayDow = (today.getDay() + 6) % 7; // 0=월~6=일
+      const { count, error: attErr } = await supabase
+        .from('lesson_attendance')
+        .select('id', { count: 'exact', head: true })
+        .eq('fixed_schedule_id', selectedFixed.id)
+        .gte('attend_date', todayMondayStr)
+        .lte('attend_date', ymd(addDays(todayMonday, 6)));
+      if (attErr) { alert('출석 기록 확인 실패: ' + attErr.message); return; }
+      if ((count || 0) > 0) {
+        changeFromMonday = addDays(todayMonday, 7);
+        deferReason = '이번 주 레슨은 이미 출석 체크가 되어 있어서 다음 주부터 적용됩니다.';
+      } else if (formDay < todayDow) {
+        changeFromMonday = addDays(todayMonday, 7);
+        deferReason = `이번 주 ${DAYS[formDay]}요일은 이미 지나서 다음 주부터 적용됩니다.`;
+      }
     }
     const changeFromStr = ymd(changeFromMonday);
+    const newDur = parseInt(formDur, 10);
+    const tail = deferReason ? `\n\n(${deferReason} 이번 주 일정을 바꾸려면 '이번 주만 변경'을 사용하세요.)` : '';
 
-    if (!confirm(`고정 스케줄을 영구적으로 변경합니다.\n${changeFromMonday.getFullYear()}년 ${fmtWeekLabel(changeFromMonday)} 주부터 적용되며, 그 이전 기록은 그대로 유지됩니다.${movedToNextWeek ? '\n\n(이번 주에 해당 요일이 이미 지나서 다음 주부터 적용됩니다. 이번 주 일정을 바꾸려면 \'이번 주만 변경\'을 사용하세요.)' : ''}`)) return;
+    // (A) 적용 시작 주부터 시작하는 행이면 → 그 행만 수정 (새 행을 또 만들지 않음)
+    if (selectedFixed.effective_from >= changeFromStr) {
+      if (!confirm(`고정 스케줄을 ${DAYS[formDay]}요일 ${formatTime12(formTime)} · ${newDur}분으로 변경합니다.\n${fmtWeekLabel(new Date(selectedFixed.effective_from + 'T00:00:00'))} 주부터 적용됩니다.`)) return;
+      setSaving(true);
+      const { error } = await supabase
+        .from('lesson_fixed_schedules')
+        .update({ day_of_week: formDay, start_time: formTime, duration_minutes: newDur })
+        .eq('id', selectedFixed.id);
+      if (error) { setSaving(false); alert('실패: ' + error.message); return; }
+      if (selectedOverride) {
+        await supabase.from('lesson_schedules').delete().eq('id', selectedOverride.id);
+      }
+      setSaving(false);
+      setModal(null);
+      loadData();
+      return;
+    }
+
+    // (B) 이미 예약된 변경(이 스케줄이 끝난 다음 주부터 시작하는 같은 회원의 스케줄)이 있는지
+    let reservations: FixedSchedule[] = [];
+    if (selectedFixed.effective_until) {
+      const nextStart = ymd(addDays(new Date(selectedFixed.effective_until + 'T00:00:00'), 1));
+      const { data: resv, error: resvErr } = await supabase
+        .from('lesson_fixed_schedules')
+        .select('*')
+        .eq('course_id', course.id)
+        .eq('enrollment_id', selectedFixed.enrollment_id)
+        .eq('effective_from', nextStart)
+        .neq('id', selectedFixed.id);
+      if (resvErr) { alert('예약된 변경 확인 실패: ' + resvErr.message); return; }
+      reservations = (resv || []) as FixedSchedule[];
+    }
+    let resvMsg = '';
+    if (reservations.length > 0) {
+      const list = reservations.map(r => `· ${DAYS[r.day_of_week]}요일 ${formatTime12(r.start_time)} (${fmtWeekLabel(new Date(r.effective_from + 'T00:00:00'))} 주부터)`).join('\n');
+      resvMsg = `\n\n이미 예약된 변경이 있습니다:\n${list}\n→ 이 예약은 지우고 새 내용으로 대체합니다.`;
+    }
+
+    if (!confirm(`고정 스케줄을 ${DAYS[formDay]}요일 ${formatTime12(formTime)} · ${newDur}분으로 영구 변경합니다.\n${changeFromMonday.getFullYear()}년 ${fmtWeekLabel(changeFromMonday)} 주부터 적용되며, 그 이전 기록은 그대로 유지됩니다.${tail}${resvMsg}`)) return;
     setSaving(true);
+
+    // 예약된 변경 정리: 출석 기록이 없으면 삭제, 있으면 지우지 않고 중단(안내)
+    for (const r of reservations) {
+      const { count: rc, error: rcErr } = await supabase
+        .from('lesson_attendance')
+        .select('id', { count: 'exact', head: true })
+        .eq('fixed_schedule_id', r.id);
+      if (rcErr) { setSaving(false); alert('실패: ' + rcErr.message); return; }
+      if ((rc || 0) > 0) {
+        setSaving(false);
+        alert(`${DAYS[r.day_of_week]}요일 ${formatTime12(r.start_time)} 스케줄에 이미 출석 기록이 있어 자동으로 정리할 수 없습니다.\n해당 주로 이동해서 그 스케줄을 직접 변경해 주세요.`);
+        return;
+      }
+      await supabase.from('lesson_schedules').delete().eq('fixed_schedule_id', r.id);
+      const { error: delErr } = await supabase.from('lesson_fixed_schedules').delete().eq('id', r.id);
+      if (delErr) { setSaving(false); alert('예약된 변경 삭제 실패: ' + delErr.message); return; }
+    }
 
     // 1) 기존 고정 스케줄은 새 스케줄 시작 전 주(일요일)까지만 유효한 것으로 마감
     const oldUntil = ymd(addDays(changeFromMonday, -1));
@@ -473,20 +545,22 @@ export default function LessonScheduleClient({
       member_id: selectedFixed.member_id,
       day_of_week: formDay,
       start_time: formTime,
-      duration_minutes: parseInt(formDur, 10),
+      duration_minutes: newDur,
       effective_from: changeFromStr,
       memo: selectedFixed.memo,
     });
     if (insErr) { setSaving(false); alert('실패: ' + insErr.message); return; }
 
-    // 3) 지금 보고 있는 주가 곧 변경 시작 주라면, 그 주에 걸려있던 "이번 주만 변경" 기록은
-    //    새 고정 스케줄로 대체되는 것이므로 정리 (그보다 이전 주의 override는 과거 기록이라 건드리지 않음)
-    if (selectedOverride && ymd(weekStart) === changeFromStr) {
-      await supabase.from('lesson_schedules').delete().eq('id', selectedOverride.id);
-    }
+    // 3) 변경 시작 주부터 걸려 있던 "이번 주만 변경/취소" 기록은 새 고정 스케줄로 대체되므로 정리
+    await supabase
+      .from('lesson_schedules')
+      .delete()
+      .eq('fixed_schedule_id', selectedFixed.id)
+      .gte('week_start', changeFromStr);
 
     setSaving(false);
     setModal(null);
+    if (deferReason) alert(`저장했습니다. ${fmtWeekLabel(changeFromMonday)} 주부터 바뀐 시간으로 표시됩니다.\n(${deferReason})`);
     loadData();
   }
 
@@ -658,6 +732,7 @@ export default function LessonScheduleClient({
                                   {formatTime12(s.displayTime)} · {s.displayDur}분
                                   {isOverride && <span style={{ marginLeft: 3, fontSize: 9, background: '#e8a800', color: 'white', borderRadius: 3, padding: '0 3px' }}>변경</span>}
                                   {isCancelled && <span style={{ marginLeft: 3, fontSize: 9 }}>취소</span>}
+                                  {s.fixed?.effective_until && s.fixed.effective_until <= ymd(addDays(weekStart, 6)) && <span style={{ marginLeft: 3, fontSize: 9, background: '#185FA5', color: 'white', borderRadius: 3, padding: '0 3px' }}>다음주변경</span>}
                                 </div>
                               </div>
                             );
@@ -741,6 +816,11 @@ export default function LessonScheduleClient({
                 {selectedOverride && !selectedOverride.is_cancelled && (
                   <p style={{ fontSize: 12, color: '#B8860B', margin: '0 0 14px', background: '#FFFBEA', borderRadius: 6, padding: '4px 8px' }}>
                     이번 주 변경됨: {formatTime12(selectedOverride.start_time)} · {selectedOverride.duration_minutes}분
+                  </p>
+                )}
+                {selectedFixed.effective_until && selectedFixed.effective_until <= ymd(addDays(weekStart, 6)) && (
+                  <p style={{ fontSize: 12, color: '#185FA5', margin: '0 0 14px', background: '#EEF5FD', borderRadius: 6, padding: '4px 8px' }}>
+                    다음 주부터 다른 시간으로 변경이 예약되어 있습니다. (▶ 다음 주에서 확인)
                   </p>
                 )}
                 {selectedOverride?.is_cancelled && (
